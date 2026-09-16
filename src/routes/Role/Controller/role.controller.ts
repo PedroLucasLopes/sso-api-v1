@@ -17,10 +17,10 @@ import { PrismaExceptionValidationFilter } from 'src/global/error/prismaclientva
 import { CreateRole } from '../dto/createRole.dto';
 import { EditRole } from '../dto/editRole.dto';
 import { FilterRole } from '../dto/filterRole.dto';
-import { Admin } from 'src/global/decorator/public.decorator';
+import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
+import { CurrentAdmin } from 'src/global/decorator/currentAdmin.decorator';
 
 @Controller('role')
-@Admin()
 export class RoleController {
   constructor(private roleService: RoleService) {}
 
@@ -39,8 +39,11 @@ export class RoleController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @UseFilters(new PrismaExceptionValidationFilter())
-  async createRole(@Body() data: CreateRole): Promise<Role> {
-    return await this.roleService.createRole(data);
+  async createRole(
+    @Body() data: CreateRole,
+    @CurrentAdmin() admin: AdminIdentity,
+  ): Promise<Role> {
+    return await this.roleService.createRole(data, admin);
   }
 
   @Put(':id')
@@ -48,13 +51,17 @@ export class RoleController {
   async updateRole(
     @Param('id') id: string,
     @Body() data: EditRole,
+    @CurrentAdmin() admin: AdminIdentity,
   ): Promise<Role> {
-    return await this.roleService.updateRole(id, data);
+    return await this.roleService.updateRole(id, data, admin);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async deleteRole(@Param('id') id: string): Promise<void> {
-    return await this.roleService.deleteRole(id);
+  async deleteRole(
+    @Param('id') id: string,
+    @CurrentAdmin() admin: AdminIdentity,
+  ): Promise<void> {
+    return await this.roleService.deleteRole(id, admin);
   }
 }

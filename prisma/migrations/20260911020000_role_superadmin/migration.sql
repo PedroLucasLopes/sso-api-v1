@@ -1,0 +1,3 @@
+-- AlterEnum
+ALTER TYPE "RoleEnum" ADD VALUE 'SUPERADMIN';
+

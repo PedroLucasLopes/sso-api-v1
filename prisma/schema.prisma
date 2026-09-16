@@ -13,17 +13,31 @@ model User {
   email        String        @unique
   name         String
   authId       String?       @unique
+  authSessions AuthSession[]
   projectUsers ProjectUser[]
 }
 
+/// Uma aplicacao cliente.
+///
+/// `status` e o interruptor: um projeto nasce PENDING e so consegue iniciar
+/// autorizacao ou trocar token depois que um administrador o ativa. Existir no
+/// banco nao basta. Suspender corta o acesso da aplicacao inteira na hora, sem
+/// precisar apagar cadastro nem revogar chave uma a uma.
 model Project {
   id           String        @id @default(uuid())
-  name         String
+  name         String        @unique
   clientId     String        @unique
+  status       ProjectStatus @default(PENDING)
   createdAt    DateTime      @default(now())
+  activatedAt  DateTime?
+  suspendedAt  DateTime?
+  clientKeys   ClientKey[]
   projectUsers ProjectUser[]
-  routes       Route[]
   redirectUris redirectUri[]
+  roles        Role[]
+  routes       Route[]
+
+  @@index([status])
 }
 
 model redirectUri {
@@ -32,6 +46,7 @@ model redirectUri {
   projectId   String
   project     Project @relation(fields: [projectId], references: [id])
 
+  @@unique([projectId, redirectUri])
   @@index([projectId])
 }
 
@@ -47,12 +62,22 @@ model Route {
   @@index([projectId])
 }
 
+/// Papel dentro de um projeto, com nome livre: maiusculas, digitos e `_`.
+///
+/// Todo projeto nasce com os padroes SUPERADMIN, ADMIN, MANAGER e VIEWER, e
+/// eles nascem vazios. O que qualquer papel alcanca sai de `Permission`,
+/// marcado rota por rota; nada disso vive no codigo. No projeto `SSO`, o
+/// SUPERADMIN e a raiz da administracao.
 model Role {
   id           String        @id @default(uuid())
-  name         RoleEnum
+  name         String
   projectId    String
   permissions  Permission[]
   projectUsers ProjectUser[]
+  project      Project       @relation(fields: [projectId], references: [id])
+
+  @@unique([name, projectId])
+  @@index([projectId])
 }
 
 model Permission {
@@ -66,6 +91,7 @@ model Permission {
   @@index([roleId, routeId])
 }
 
+/// Um papel por pessoa por projeto. Trocar de papel substitui o anterior.
 model ProjectUser {
   userId    String
   projectId String
@@ -78,10 +104,109 @@ model ProjectUser {
   @@index([projectId, roleId])
 }
 
-enum RoleEnum {
-  ADMIN
-  MANAGER
-  VIEWER
+/// Chaves de assinatura do proprio Authorization Server (RS256).
+/// A privada e guardada cifrada com AES-256-GCM usando KEY_ENCRYPTION_KEY.
+/// `id` e publicado como `kid` no JWKS.
+model SigningKey {
+  id                 String    @id @default(uuid())
+  algorithm          String    @default("RS256")
+  publicKeyPem       String
+  privateKeyCipher   String
+  privateKeyIv       String
+  privateKeyAuthTag  String
+  status             KeyStatus @default(ACTIVE)
+  createdAt          DateTime  @default(now())
+  retiredAt          DateTime?
+
+  @@index([status])
+}
+
+/// Chave publica de um client, usada para autenticar o token endpoint
+/// via private_key_jwt (RFC 7523 secao 2.2). Substitui o clientSecret removido.
+model ClientKey {
+  id           String    @id @default(uuid())
+  projectId    String
+  algorithm    String    @default("RS256")
+  publicKeyPem String
+  createdAt    DateTime  @default(now())
+  expiresAt    DateTime?
+  revokedAt    DateTime?
+  project      Project   @relation(fields: [projectId], references: [id])
+
+  @@index([projectId])
+}
+
+/// Sessao autenticada do usuario com o proprio SSO, criada apos o login Google.
+/// A vida do refresh token e amarrada a ela (RFC 10017 secao 6.3.2.3).
+model AuthSession {
+  id            String         @id @default(uuid())
+  userId        String
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  createdAt     DateTime       @default(now())
+  lastSeenAt    DateTime       @default(now())
+  user          User           @relation(fields: [userId], references: [id])
+  refreshTokens RefreshToken[]
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Authorization code. Nao pode virar cookie: quem resgata e o backend do RP,
+/// sem cookie no request. Guardado como hash e consumido atomicamente para
+/// garantir uso unico (RFC 6749 secao 4.1.2) e detectar replay (RFC 9700 secao 2.1.1).
+model AuthorizationCode {
+  id                  String    @id @default(uuid())
+  codeHash            String    @unique
+  userId              String
+  projectId           String
+  authSessionId       String
+  redirectUri         String
+  codeChallenge       String
+  codeChallengeMethod String    @default("S256")
+  expiresAt           DateTime
+  consumedAt          DateTime?
+  createdAt           DateTime  @default(now())
+
+  @@index([expiresAt])
+  @@index([authSessionId])
+}
+
+/// Refresh token com rotacao obrigatoria e deteccao de reuso.
+/// `familyId` agrupa a cadeia inteira: reuso de um token ja consumido
+/// revoga a familia toda (RFC 9700 secao 2.2.2, RFC 10017 secao 6.3.2.3).
+model RefreshToken {
+  id            String      @id @default(uuid())
+  tokenHash     String      @unique
+  familyId      String
+  userId        String
+  projectId     String
+  authSessionId String
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  revokedAt     DateTime?
+  replacedById  String?
+  createdAt     DateTime    @default(now())
+  authSession   AuthSession @relation(fields: [authSessionId], references: [id])
+
+  @@index([familyId])
+  @@index([userId, projectId])
+  @@index([expiresAt])
+}
+
+enum KeyStatus {
+  ACTIVE
+  NEXT
+  RETIRED
+}
+
+enum ProjectStatus {
+  /// Cadastrado, ainda sem autorizacao para usar o SSO.
+  PENDING
+  /// Liberado por um administrador.
+  ACTIVE
+  /// Acesso cortado. O cadastro permanece para auditoria.
+  SUSPENDED
 }
 
 enum Method {

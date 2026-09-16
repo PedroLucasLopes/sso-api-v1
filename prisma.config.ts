@@ -10,5 +10,14 @@ export default defineConfig({
   },
   datasource: {
     url: process.env["DATABASE_URL"],
+    // Banco descartavel onde o Prisma replica as migrations para calcular o
+    // diff. Necessario para `migrate diff --from-migrations` e para o
+    // `migrate dev` quando o usuario do banco nao pode criar databases.
+    //
+    // So passa quando tem valor: string vazia e uma URL invalida, e o Prisma
+    // recusa com P1013 mesmo em comandos que nem usam shadow database.
+    ...(process.env["SHADOW_DATABASE_URL"]
+      ? { shadowDatabaseUrl: process.env["SHADOW_DATABASE_URL"] }
+      : {}),
   },
 });

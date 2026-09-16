@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from 'src/global/prisma/prisma.service';
+import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
+import { assertSelfWriter } from 'src/global/access/selfProjectProtection';
 import { FilterRoute } from '../dto/filterRoute.dto';
 import { Route } from 'generated/prisma/client';
 import { PaginationConfig } from 'src/global/pagination/pagination';
@@ -55,7 +57,7 @@ export class RouteService {
     return route;
   }
 
-  async createRoute(data: CreateRoute): Promise<Route> {
+  async createRoute(data: CreateRoute, admin: AdminIdentity): Promise<Route> {
     const findProject = await this.prisma.project.findUnique({
       where: { id: data.projectId },
     });
@@ -64,18 +66,31 @@ export class RouteService {
       throw new NotFoundException('Project not found');
     }
 
+    await assertSelfWriter(this.prisma, admin, data.projectId);
+
     const path = this.normalizePath(data.path);
     const createRoute = this.prisma.route.create({ data: { ...data, path } });
 
     return createRoute;
   }
 
-  async updateRoute(id: string, data: EditRoute): Promise<Route> {
+  async updateRoute(
+    id: string,
+    data: EditRoute,
+    admin: AdminIdentity,
+  ): Promise<Route> {
     const findRoute = await this.prisma.route.findUnique({ where: { id } });
 
     if (!findRoute) {
       throw new NotFoundException('Route not found');
     }
+
+    await assertSelfWriter(
+      this.prisma,
+      admin,
+      findRoute.projectId,
+      data.projectId,
+    );
 
     if (data.path) {
       Object.assign(data, { ...data, path: this.normalizePath(data.path) });
@@ -89,7 +104,7 @@ export class RouteService {
     return updateRoute;
   }
 
-  async deleteRoute(id: string): Promise<void> {
+  async deleteRoute(id: string, admin: AdminIdentity): Promise<void> {
     const findRoute = await this.prisma.route.findUnique({
       where: { id },
       include: { permissions: true },
@@ -98,6 +113,8 @@ export class RouteService {
     if (!findRoute) {
       throw new NotFoundException('Route not found');
     }
+
+    await assertSelfWriter(this.prisma, admin, findRoute.projectId);
 
     await this.prisma.route.delete({ where: { id } });
   }

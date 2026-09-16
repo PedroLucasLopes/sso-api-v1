@@ -1,5 +1,6 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
 
+/** O que a GoogleStrategy entrega ao controller depois de validar o perfil. */
 export class GoogleUser {
   @IsString()
   @IsNotEmpty()
@@ -12,8 +13,4 @@ export class GoogleUser {
   @IsString()
   @IsNotEmpty()
   name: string;
-
-  @IsString()
-  @IsOptional()
-  state?: string;
 }

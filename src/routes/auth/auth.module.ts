@@ -1,31 +1,45 @@
 import { Module } from '@nestjs/common';
-import { PrismaModule } from 'src/global/prisma/prisma.module';
-import { AuthController } from './Controller/auth.controller';
-import { AuthService } from './Service/auth.service';
+import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { PrismaModule } from 'src/global/prisma/prisma.module';
+import { KeyModule } from '../Key/key.module';
+import { AuthController } from './Controller/auth.controller';
+import { LoginController } from './Controller/login.controller';
+import { SessionController } from './Controller/session.controller';
+import { AuthService } from './Service/auth.service';
+import { AuthSessionService } from './Service/authSession.service';
+import { AuthorizationCodeService } from './Service/authorizationCode.service';
+import { ClientAuthService } from './Service/clientAuth.service';
+import { LoginPageService } from './Service/loginPage.service';
+import { PermissionSetService } from './Service/permissionSet.service';
+import { RefreshTokenService } from './Service/refreshToken.service';
+import { TokenIssuerService } from './Service/tokenIssuer.service';
 import { GoogleStrategy } from './strategy/google.strategy';
-import { RedisModule } from '../Redis/redis.module';
 
 @Module({
   imports: [
     PrismaModule,
     PassportModule,
-    JwtModule.registerAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        secret: config.getOrThrow<string>('JWT_SECRET'),
-        signOptions: {
-          expiresIn: config.get<number>('JWT_EXPIRES_IN', 1209600),
-        },
-      }),
-    }),
-    RedisModule,
+    // Sem segredo global: a assinatura e RS256 e a chave privada vem do
+    // SigningKeyService a cada emissao, com o kid no header. A verificacao
+    // de asserção de cliente usa a chave publica do proprio cliente.
+    JwtModule.register({}),
+    KeyModule,
     ConfigModule,
   ],
-  controllers: [AuthController],
-  providers: [AuthService, GoogleStrategy],
+  controllers: [AuthController, SessionController, LoginController],
+  providers: [
+    AuthService,
+    AuthSessionService,
+    AuthorizationCodeService,
+    PermissionSetService,
+    RefreshTokenService,
+    TokenIssuerService,
+    ClientAuthService,
+    LoginPageService,
+    GoogleStrategy,
+  ],
+  exports: [AuthSessionService, RefreshTokenService],
 })
 export class AuthModule {}

@@ -56,3 +56,9 @@ pids
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 /generated/prisma
+
+# Qualquer arquivo de ambiente, menos o exemplo. Regra abrangente de
+# proposito: .env.docker, .env.prod e o que vier depois ja nascem ignorados.
+.env
+.env.*
+!.env.example

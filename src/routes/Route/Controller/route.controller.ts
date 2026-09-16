@@ -17,10 +17,10 @@ import { Route } from 'generated/prisma/client';
 import { CreateRoute } from '../dto/createRoute.dto';
 import { PrismaExceptionValidationFilter } from 'src/global/error/prismaclientvalidationerror.exception';
 import { EditRoute } from '../dto/editRoute.dto';
-import { Admin } from 'src/global/decorator/public.decorator';
+import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
+import { CurrentAdmin } from 'src/global/decorator/currentAdmin.decorator';
 
 @Controller('route')
-@Admin()
 export class RouteController {
   constructor(private routeService: RouteService) {}
 
@@ -39,8 +39,11 @@ export class RouteController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @UseFilters(new PrismaExceptionValidationFilter())
-  async createRoute(@Body() data: CreateRoute): Promise<Route> {
-    return await this.routeService.createRoute(data);
+  async createRoute(
+    @Body() data: CreateRoute,
+    @CurrentAdmin() admin: AdminIdentity,
+  ): Promise<Route> {
+    return await this.routeService.createRoute(data, admin);
   }
 
   @Put(':id')
@@ -48,13 +51,17 @@ export class RouteController {
   async updateRoute(
     @Param('id') id: string,
     @Body() data: EditRoute,
+    @CurrentAdmin() admin: AdminIdentity,
   ): Promise<Route> {
-    return await this.routeService.updateRoute(id, data);
+    return await this.routeService.updateRoute(id, data, admin);
   }
 
-  @Delete('id')
+  @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async deleteRoute(@Param('id') id: string): Promise<void> {
-    return await this.routeService.deleteRoute(id);
+  async deleteRoute(
+    @Param('id') id: string,
+    @CurrentAdmin() admin: AdminIdentity,
+  ): Promise<void> {
+    return await this.routeService.deleteRoute(id, admin);
   }
 }

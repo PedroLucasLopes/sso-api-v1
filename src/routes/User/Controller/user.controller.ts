@@ -17,10 +17,8 @@ import { FilterUser } from '../dto/filterUser.dto';
 import { CreateUser } from '../dto/createUser.dto';
 import { EditUser } from '../dto/editUser.dto';
 import { PrismaExceptionValidationFilter } from 'src/global/error/prismaclientvalidationerror.exception';
-import { Admin } from 'src/global/decorator/public.decorator';
 
 @Controller('user')
-@Admin()
 export class UserController {
   constructor(private userService: UserService) {}
 
