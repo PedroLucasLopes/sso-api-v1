@@ -4,7 +4,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import * as crypto from 'node:crypto';
-import { ClientKey } from 'generated/prisma/client';
+import { Prisma } from '@prisma/client';
+
+type ClientKey = Prisma.ClientKeyGetPayload<{}>;
 import { PrismaService } from 'src/global/prisma/prisma.service';
 import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
 import { assertSelfWriter } from 'src/global/access/selfProjectProtection';
@@ -148,7 +150,7 @@ export class ClientKeyService {
     await assertSelfWriter(this.prisma, admin, key.projectId);
 
     const { count } = await this.prisma.clientKey.updateMany({
-      where: { id, revokedAt: null },
+      where: { id: { equals: id }, revokedAt: null },
       data: { revokedAt: new Date() },
     });
 
