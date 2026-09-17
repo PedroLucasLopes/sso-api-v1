@@ -12,6 +12,7 @@ mas quem emite o `access_token` consumido pelas aplicações é este serviço.
 | `sso-api-v1` (este) | Authorization Server + CRUD RBAC |
 | [`plataforma_sso-v1`](https://github.com/PedroLucasLopes/plataforma_sso-v1) | tela de login do IdP e console administrativo (Vue/Vuetify) |
 | [`krloc-api-v1`](https://github.com/PedroLucasLopes/krloc-api-v1) | Relying Party — API de locação de equipamentos |
+| [`plataforma_krloc-v1`](https://github.com/PedroLucasLopes/plataforma_krloc-v1) | front da locação de equipamentos (Vue/Vuetify) |
 | [`sso-lib-v1`](https://github.com/PedroLucasLopes/sso-lib-v1) | `@pedrolucaslopes/sso-client`, a autenticação das APIs |
 | [`components_storybook-v1`](https://github.com/PedroLucasLopes/components_storybook-v1) | `@pedrolucaslopes/dotlog-ui`, componentes e Storybook |
 

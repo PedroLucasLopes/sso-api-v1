@@ -10,6 +10,7 @@ atenção. **Leia o do repositório que você vai tocar antes de mexer.**
 | [`sso-api-v1`](https://github.com/PedroLucasLopes/sso-api-v1) | Authorization Server + catálogo RBAC | NestJS 11 · Prisma 7 · Postgres | `/sso` | 8080 |
 | [`plataforma_sso-v1`](https://github.com/PedroLucasLopes/plataforma_sso-v1) | tela de login do IdP e console do SSO | Vue 3 · Vuetify 4 · Pinia · Vite 8 | — | 5173 |
 | [`krloc-api-v1`](https://github.com/PedroLucasLopes/krloc-api-v1) | Relying Party — locação de equipamentos | NestJS 11 · Prisma 7 · Postgres | `/api` | 3000 |
+| [`plataforma_krloc-v1`](https://github.com/PedroLucasLopes/plataforma_krloc-v1) | front da locação de equipamentos | Vue 3 · Vuetify 4 · Pinia · Vite 8 | — | 5174 |
 | [`sso-lib-v1`](https://github.com/PedroLucasLopes/sso-lib-v1) | `@pedrolucaslopes/sso-client`: autenticação das APIs | NestJS module · TypeScript | — | — |
 | [`components_storybook-v1`](https://github.com/PedroLucasLopes/components_storybook-v1) | `@pedrolucaslopes/dotlog-ui`: componentes, tema e Storybook | Vue 3 · Vuetify 4 · Storybook 10 | — | 6007 |
 
@@ -58,7 +59,7 @@ credenciais de operador do SSO alvo, que a aplicação recebe no **próprio** `.
 4. Na aplicação, `.npmrc` do registro, `npm i @pedrolucaslopes/sso-client` e uma linha no
    `app.module.ts`: `SsoClientModule.forRootFromEnv()`. Front novo instala também
    `@pedrolucaslopes/dotlog-ui` e `vue-i18n`, com um JSON de tradução por língua: o menu do usuário
-   lista as línguas sozinho.
+   lista as línguas sozinho. O `plataforma_krloc-v1` é o modelo de front para uma API assim.
 5. Preencher o `.env` dela: `SSO_ISSUER`, `APP_CLIENT_ID`, a chave privada, `APP_BASE_URL`,
    `COOKIE_SECRET`. Faltando alguma, a aplicação não sobe e diz quais faltam. Em container, também
    `SSO_INTERNAL_URL=http://host.docker.internal:8080/sso`: lá dentro, o `localhost` do issuer é o
@@ -74,7 +75,7 @@ precisa que o `krloc-api-v1` exista.
 | Pacote | Repositório | Quem instala |
 |---|---|---|
 | `@pedrolucaslopes/sso-client` | `PedroLucasLopes/sso-lib-v1` | toda API ligada ao SSO; hoje, o `krloc-api-v1` |
-| `@pedrolucaslopes/dotlog-ui` | `PedroLucasLopes/components_storybook-v1` | todo front do ecossistema; hoje, o `plataforma_sso-v1` |
+| `@pedrolucaslopes/dotlog-ui` | `PedroLucasLopes/components_storybook-v1` | todo front do ecossistema; hoje, o `plataforma_sso-v1` e o `plataforma_krloc-v1` |
 
 - **Privados, no GitHub Packages.** Instalar exige um token **clássico** com `read:packages`, porque o
   registro não aceita token fine-grained. Cada consumidor versiona um `.npmrc` que só diz onde buscar
@@ -103,6 +104,7 @@ compartilhada nem ordem de subida: cada aplicação chega ao SSO pela porta que 
 | `sso-api-v1` | `sso-migrate` · `sso` | `.env.docker` |
 | `krloc-api-v1` | `krloc-migrate` · `krloc` | `.env.docker`, com `SSO_INTERNAL_URL=http://host.docker.internal:8080/sso` |
 | `plataforma_sso-v1` | `sso-plataforma` | nenhum arquivo: `SSO_UPSTREAM` está no próprio compose |
+| `plataforma_krloc-v1` | `krloc-plataforma` | nenhum arquivo: `KRLOC_UPSTREAM` está no próprio compose |
 
 Na primeira vez, em cada API:
 
@@ -118,12 +120,14 @@ docker compose up -d --build --wait
 
 O login só funciona com o SSO de pé, mas nenhum container espera por ele para ficar saudável.
 
-> O build do `krloc-api-v1` e do `plataforma_sso-v1` instala pacotes do GitHub Packages, que exige
+> O build do `krloc-api-v1`, do `plataforma_sso-v1` e do `plataforma_krloc-v1` instala pacotes do GitHub Packages, que exige
 > token até para ler. Rode o compose num terminal com `NODE_AUTH_TOKEN` no ambiente: ele entra como
 > secret do BuildKit, só durante o `npm ci`, e não fica em camada nenhuma da imagem.
 
-A porta do host muda com `SSO_PORT`, `KRLOC_PORT` e `PLATAFORMA_PORT`. Mudou a do SSO, mude junto o
-`SSO_INTERNAL_URL` do krloc e o `SSO_UPSTREAM` do console.
+A porta do host muda com `SSO_PORT`, `KRLOC_PORT`, `PLATAFORMA_PORT` e `KRLOC_PLATAFORMA_PORT`. Mudou a
+do SSO, mude junto o `SSO_INTERNAL_URL` do krloc e o `SSO_UPSTREAM` do console. Mudou a do front do
+KRLoc, mude junto o `APP_BASE_URL` do krloc e a `redirect_uri` do projeto KRLoc no SSO; mudou a da API
+do KRLoc, mude o `KRLOC_UPSTREAM` do front.
 
 **Não há serviço de Postgres em compose nenhum.** Os containers falam com o Postgres **nativo** da
 máquina, por `host.docker.internal`. Um banco próprio no compose criava um segundo mundo, vazio: o
@@ -308,6 +312,11 @@ RFCs: 6749 (core), 7009 (revogação), 7523 (client assertion), 7636 (PKCE), 841
     nome da pessoa, com bandeira. Cada front traduz com vue-i18n e um JSON por língua, e o
     `dotlog-ui` 0.2.0 traduz os próprios componentes e segue a mesma língua. Língua nova é um JSON a
     mais, sem código.
+24. **Front do KRLoc.** O `plataforma_krloc-v1` é a interface da API do KRLoc, na mesma origem dela, e
+    não conduz OAuth: o `sso-client` da API faz o login e o front só lê a sessão em `/api/auth/me`.
+    Contratos com o ciclo inteiro, equipamentos, acessórios, clientes e obras, nas três línguas. Os
+    componentes que faltavam nasceram antes na biblioteca, na 0.3.0: `DlFileDrop`, `DlMoneyField` e
+    `DlLifecycle`.
 
 Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 143 asserções, e `npx jest` para
 as regras de proteção) e `test/sso-e2e.js` do `krloc-api-v1` (`npm run test:sso`, 83 asserções). As
