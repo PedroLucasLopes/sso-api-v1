@@ -1,8 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma } from '@prisma/client';
-
-type AuthSession = Prisma.AuthSessionGetPayload<{}>;
+import { AuthSession } from 'generated/prisma/client';
 import { PrismaService } from 'src/global/prisma/prisma.service';
 
 /**
@@ -72,7 +70,7 @@ export class AuthSessionService {
 
   async revoke(id: string): Promise<void> {
     await this.prisma.authSession.updateMany({
-      where: { id: { equals: id }, revokedAt: null },
+      where: { id, revokedAt: null },
       data: { revokedAt: new Date() },
     });
   }
