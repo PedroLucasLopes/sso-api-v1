@@ -50,7 +50,7 @@ Em container, `docker compose up -d --build` na raiz deste repositório, com a c
 `.env.docker`. O compose sobe só o SSO e as migrations. Cada aplicação sobe o próprio compose, no
 próprio repositório, e chega a este serviço pela porta da máquina, `host.docker.internal:8080`.
 
-`npm run test:oauth` sobe 143 asserções contra o servidor rodando: ordem dos erros do authorize,
+`npm run test:oauth` sobe 149 asserções contra o servidor rodando: ordem dos erros do authorize,
 formato dos erros do token endpoint, PKCE, autenticação de cliente, verificação do access token
 contra o JWKS, uso único do code, rotação de refresh token, revogação pelos dois tipos de token, a
 autorização administrativa vinda do banco, a raiz e o 404 de rota negada, papéis de nome livre, troca
@@ -169,9 +169,9 @@ Endpoints em `routes/auth/`. A classe `AuthController` inteira é `@Public()`.
 
 1. `client_id` existe? Se não, **erro exibido, sem redirect**.
 2. `redirect_uri` está na lista branca, por **comparação de string exata**? Se não, **sem redirect**.
-3. Daqui em diante todo erro **volta pela `redirect_uri`** com `error`, `error_description` e `state`:
-   `state` presente, `response_type=code`, `code_challenge_method=S256`, `code_challenge` no formato
-   da RFC 7636 §4.1 (43 a 128 caracteres do conjunto unreserved).
+3. Daqui em diante todo erro **volta pela `redirect_uri`** com `error`, `error_description`, `state`
+   e `iss`: `state` presente, `response_type=code`, `code_challenge_method=S256`, `code_challenge`
+   no formato da RFC 7636 §4.1 (43 a 128 caracteres do conjunto unreserved).
 
 Com sessão viva o code sai na hora. Sem ela, a transação vai para o cookie `sso_tx` e a pessoa vai
 à tela de login do front, que oferece o Google.
@@ -516,6 +516,10 @@ por teste em `test/oauth-e2e.js`.
   `PUT` e `DELETE /sso/projectuser/:projectId/:userId`.
 - **`bootstrap-sso.js`, `register-app.js` e `operator-token.js` saíram.** Clonar o repositório dava a
   qualquer um o catálogo inteiro e o caminho para se tornar administrador de um banco novo.
+- **Erro redirecionado voltava sem `iss`.** A RFC 9207 §2 o exige em toda resposta de autorização,
+  inclusive a de erro, e o `AuthorizeRedirectExceptionFilter`, que devolve o `access_denied` de quem
+  não tem papel no projeto, mandava só `error`, `error_description` e `state`. O discovery também
+  passou a anunciar `authorization_response_iss_parameter_supported`, exigido pela §2.3.
 
 ---
 
@@ -523,6 +527,8 @@ por teste em `test/oauth-e2e.js`.
 
 - `redirect_uri` **sempre** por comparação exata. Nunca prefixo, nunca regex.
 - `code_challenge_method` restrito a `S256`.
+- Toda resposta que volta pela `redirect_uri`, de sucesso ou de erro, leva `iss`, com o mesmo valor
+  do `issuer` do discovery (RFC 9207 §2 e §2.3).
 - Authorization code de uso único, com vida em segundos.
 - Refresh token rotativo, com teto absoluto herdado pela família.
 - Chave privada de assinatura nunca sai do processo em claro nem vai para o banco em claro.

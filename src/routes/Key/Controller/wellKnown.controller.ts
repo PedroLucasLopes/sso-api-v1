@@ -46,6 +46,10 @@ export class WellKnownController {
       jwks_uri: `${this.issuer}/.well-known/jwks.json`,
       response_types_supported: ['code'],
       response_modes_supported: ['query'],
+      // RFC 9207 secao 2.3: quem publica estes metadados e manda `iss` na
+      // resposta de autorizacao TEM de anunciar. Sem o anuncio, a secao 2.4
+      // recomenda ao cliente descartar resposta com `iss` deste servidor.
+      authorization_response_iss_parameter_supported: true,
       // Reflete o que o token endpoint aceita hoje.
       // `refresh_token` entra junto com a rotacao de refresh token.
       grant_types_supported: ['authorization_code'],

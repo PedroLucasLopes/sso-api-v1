@@ -16,6 +16,8 @@ export class AuthorizationServerMetadata {
   jwks_uri: string;
   response_types_supported: string[];
   response_modes_supported: string[];
+  /** RFC 9207 secao 3: o `iss` vai em toda resposta de autorizacao. */
+  authorization_response_iss_parameter_supported: boolean;
   grant_types_supported: string[];
   code_challenge_methods_supported: string[];
   token_endpoint_auth_methods_supported: string[];

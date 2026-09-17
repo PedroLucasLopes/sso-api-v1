@@ -290,6 +290,34 @@ const verifyWithJwks = async (token) => {
   check('response_type=token volta unsupported_response_type pela redirect_uri',
     badType.location?.includes('error=unsupported_response_type'), badType.location ?? '');
 
+  /* RFC 9207 secao 2: o iss vai em toda resposta de autorizacao, inclusive na
+   * de erro, e a secao 2.4 proibe o cliente de supor que um erro veio deste
+   * servidor sem conferi-lo. */
+  const issDe = (location) => (location ? new URL(location).searchParams.get('iss') : null);
+  check('erro devolvido pela redirect_uri tambem traz iss (RFC 9207 secao 2)',
+    issDe(badType.location) === BASE, issDe(badType.location) ?? 'ausente');
+
+  // Sessao viva de quem nao tem papel no projeto: a recusa vem depois de
+  // client_id e redirect_uri validados, entao volta pela redirect_uri.
+  rodada.usuarios.push(`sem-papel-${tag}@exemplo.com`);
+  const semPapel = await api('POST', '/user', { name: 'Sem papel', email: `sem-papel-${tag}@exemplo.com` });
+  const sessaoSemVinculo = crypto.randomUUID();
+  await db.query(
+    `INSERT INTO "AuthSession" (id, "userId", "expiresAt")
+     VALUES ($1, $2, (now() AT TIME ZONE 'utc') + interval '1 hour')`,
+    [sessaoSemVinculo, semPapel.json.id],
+  );
+  const negado = await api('GET', authorizeQs(), null, {
+    cookie: `sso_session=${sealCookie({ authSessionId: sessaoSemVinculo })}`,
+  });
+  const voltaNegada = negado.location ? new URL(negado.location) : null;
+  check('sem papel no projeto, access_denied volta pela redirect_uri com state e iss',
+    negado.status === 302
+      && voltaNegada?.searchParams.get('error') === 'access_denied'
+      && voltaNegada?.searchParams.get('state') === state
+      && voltaNegada?.searchParams.get('iss') === BASE,
+    negado.location ?? `HTTP ${negado.status}`);
+
   const authorized = await api('GET', authorizeQs(), null, { cookie: sessionCookie });
   const loc = new URL(authorized.location);
   const code = loc.searchParams.get('code');
@@ -297,6 +325,17 @@ const verifyWithJwks = async (token) => {
   check('state e devolvido intacto', loc.searchParams.get('state') === state);
   check('parametro iss presente (RFC 9207, anti mix-up)', loc.searchParams.get('iss') === BASE,
     loc.searchParams.get('iss') ?? 'ausente');
+
+  /* RFC 9207 secao 2.3: quem publica metadados (RFC 8414) anuncia o suporte, e o
+   * `issuer` deles e identico ao `iss` das respostas. E contra ele que a secao
+   * 2.4 manda o cliente conferir. */
+  const metadados = await (await fetch(`${BASE}/.well-known/oauth-authorization-server`)).json();
+  check('discovery anuncia authorization_response_iss_parameter_supported (RFC 9207 secao 2.3)',
+    metadados.authorization_response_iss_parameter_supported === true,
+    String(metadados.authorization_response_iss_parameter_supported));
+  check('issuer do discovery identico ao iss do sucesso e do erro (RFC 9207 secao 2.3)',
+    metadados.issuer === loc.searchParams.get('iss') && metadados.issuer === voltaNegada?.searchParams.get('iss'),
+    `${metadados.issuer} | ${voltaNegada?.searchParams.get('iss') ?? 'ausente'}`);
 
   console.log('\n=== token endpoint ===');
   const form = (o) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(o) });

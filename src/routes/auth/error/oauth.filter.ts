@@ -3,8 +3,10 @@ import {
   Catch,
   ExceptionFilter,
   HttpStatus,
+  Injectable,
   Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Response } from 'express';
 import { AuthorizeRedirectException, OAuthException } from './oauth.exception';
 
@@ -39,10 +41,22 @@ export class OAuthExceptionFilter implements ExceptionFilter {
  * Devolve o erro do authorization endpoint pela redirect_uri ja validada,
  * preservando o `state` para que o cliente consiga casar a resposta com a
  * requisicao que ele iniciou (RFC 6749 secao 4.1.2.1).
+ *
+ * Leva tambem o `iss`, como a resposta de sucesso. A RFC 9207 secao 2 o exige
+ * em toda resposta de autorizacao, inclusive a de erro, e a secao 2.4 proibe o
+ * cliente de supor que um erro veio do servidor certo sem conferi-lo.
  */
 @Catch(AuthorizeRedirectException)
+@Injectable()
 export class AuthorizeRedirectExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(AuthorizeRedirectExceptionFilter.name);
+  private readonly issuer: string;
+
+  constructor(config: ConfigService) {
+    // Sem barra no fim: o mesmo valor do `iss` do sucesso e do `issuer` do
+    // discovery, que a RFC 9207 secao 2.3 quer identicos.
+    this.issuer = config.getOrThrow<string>('SSO_ISSUER').replace(/\/+$/, '');
+  }
 
   catch(exception: AuthorizeRedirectException, host: ArgumentsHost): void {
     const res = host.switchToHttp().getResponse<Response>();
@@ -54,6 +68,8 @@ export class AuthorizeRedirectExceptionFilter implements ExceptionFilter {
     if (exception.state) {
       target.searchParams.set('state', exception.state);
     }
+
+    target.searchParams.set('iss', this.issuer);
 
     this.logger.warn(
       `authorize recusado: ${exception.error} (${exception.errorDescription})`,

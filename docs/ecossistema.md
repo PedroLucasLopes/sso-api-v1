@@ -318,7 +318,7 @@ RFCs: 6749 (core), 7009 (revogação), 7523 (client assertion), 7636 (PKCE), 841
     componentes que faltavam nasceram antes na biblioteca, na 0.3.0: `DlFileDrop`, `DlMoneyField` e
     `DlLifecycle`.
 
-Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 143 asserções, e `npx jest` para
+Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 149 asserções, e `npx jest` para
 as regras de proteção) e `test/sso-e2e.js` do `krloc-api-v1` (`npm run test:sso`, 83 asserções). As
 duas suítes ponta a ponta rodam contra a stack de pé, criam o que precisam e desfazem tudo no fim,
 inclusive quando quebram no meio.
