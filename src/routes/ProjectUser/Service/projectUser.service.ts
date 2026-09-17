@@ -11,9 +11,7 @@ import {
 } from 'src/global/access/selfProjectProtection';
 import { CreateProjectUser } from '../dto/createProjectUser.dto';
 import { EditProjectUser } from '../dto/editProjectUser.dto';
-import { Prisma } from '@prisma/client';
-
-type ProjectUser = Prisma.ProjectUserGetPayload<{}>;
+import { ProjectUser } from 'generated/prisma/client';
 
 /**
  * Quem tem acesso a cada projeto, e com qual papel. Um papel por pessoa por
@@ -141,11 +139,7 @@ export class ProjectUserService {
 
     await this.prisma.$transaction([
       this.prisma.refreshToken.updateMany({
-        where: {
-          userId: { equals: userId },
-          projectId: { equals: projectId },
-          revokedAt: null,
-        },
+        where: { userId, projectId, revokedAt: null },
         data: { revokedAt: new Date() },
       }),
       this.prisma.projectUser.delete({

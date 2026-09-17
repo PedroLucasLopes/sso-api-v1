@@ -3,10 +3,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-
-type Project = Prisma.ProjectGetPayload<{}>;
-type ProjectStatus = Prisma.ProjectStatus;
+import { Project } from 'generated/prisma/client';
+import { ProjectStatus } from 'generated/prisma/enums';
 import { ProjectOverview } from '../dto/projectOverview.dto';
 import { PaginationConfig } from 'src/global/pagination/pagination';
 import { PrismaService } from 'src/global/prisma/prisma.service';
@@ -251,13 +249,9 @@ export class ProjectService {
     }
 
     await this.prisma.$transaction([
-      this.prisma.role.deleteMany({ where: { projectId: { equals: id } } }),
-      this.prisma.redirectUri.deleteMany({
-        where: { projectId: { equals: id } },
-      }),
-      this.prisma.clientKey.deleteMany({
-        where: { projectId: { equals: id } },
-      }),
+      this.prisma.role.deleteMany({ where: { projectId: id } }),
+      this.prisma.redirectUri.deleteMany({ where: { projectId: id } }),
+      this.prisma.clientKey.deleteMany({ where: { projectId: id } }),
       this.prisma.project.delete({ where: { id } }),
     ]);
   }

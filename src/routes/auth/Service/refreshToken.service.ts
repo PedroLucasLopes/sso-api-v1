@@ -241,11 +241,7 @@ export class RefreshTokenService {
     projectId: string,
   ): Promise<number> {
     const { count } = await this.prisma.refreshToken.updateMany({
-      where: {
-        authSessionId: { equals: authSessionId },
-        projectId: { equals: projectId },
-        revokedAt: null,
-      },
+      where: { authSessionId, projectId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
 
@@ -254,7 +250,7 @@ export class RefreshTokenService {
 
   async revokeForSession(authSessionId: string): Promise<void> {
     await this.prisma.refreshToken.updateMany({
-      where: { authSessionId: { equals: authSessionId }, revokedAt: null },
+      where: { authSessionId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
   }
