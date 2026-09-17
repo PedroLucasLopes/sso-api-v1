@@ -59,9 +59,13 @@ credenciais de operador do SSO alvo, que a aplicação recebe no **próprio** `.
 4. Na aplicação, `.npmrc` do registro, `npm i @pedrolucaslopes/sso-client` e uma linha no
    `app.module.ts`: `SsoClientModule.forRootFromEnv()`. Front novo instala também
    `@pedrolucaslopes/dotlog-ui` e `vue-i18n`, com um JSON de tradução por língua: o menu do usuário
-   lista as línguas sozinho. O `plataforma_krloc-v1` é o modelo de front para uma API assim.
+   lista as línguas sozinho. A marca dele entra no `DlAppShell` por `logo`, o mesmo ícone da aba do
+   navegador; sem ela, o menu mostra um ícone neutro. O `plataforma_krloc-v1` é o modelo de front para
+   uma API assim.
 5. Preencher o `.env` dela: `SSO_ISSUER`, `APP_CLIENT_ID`, a chave privada, `APP_BASE_URL`,
-   `COOKIE_SECRET`. Faltando alguma, a aplicação não sobe e diz quais faltam. Em container, também
+   `COOKIE_SECRET`. Faltando alguma, a aplicação não sobe e diz quais faltam. Com front, também
+   `APP_LOGIN_ERROR_REDIRECT`, a tela pública dele que explica login recusado: sem ela, quem o SSO
+   recusa, como uma conta sem papel no projeto, recebe JSON no callback. Em container, também
    `SSO_INTERNAL_URL=http://host.docker.internal:8080/sso`: lá dentro, o `localhost` do issuer é o
    próprio container.
 
@@ -318,7 +322,15 @@ RFCs: 6749 (core), 7009 (revogação), 7523 (client assertion), 7636 (PKCE), 841
     componentes que faltavam nasceram antes na biblioteca, na 0.3.0: `DlFileDrop`, `DlMoneyField` e
     `DlLifecycle`.
 
-Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 149 asserções, e `npx jest` para
+25. **Revisão de segurança dos seis repositórios.** Cada um ganhou um `PENTEST.md` com escopo, método,
+    achados pontuados por severidade e CVSS v3.1, evidência de como foram verificados e o que foi feito
+    em cada um. O que saiu desta rodada: dependências de produção zeradas nas duas APIs (`npm audit`
+    com `found 0 vulnerabilities`, com `overrides` para o que vinha preso a versão fixa), limite de
+    requisições por origem, `helmet` com política fechada, teto no `limit` da paginação, política de
+    conteúdo completa nos dois fronts, upload com teto no multer e conferência de tipo, e a exclusão de
+    usuário que a chave estrangeira travava. Os riscos aceitos estão escritos, com a razão de cada um.
+
+Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 155 asserções, e `npx jest` para
 as regras de proteção) e `test/sso-e2e.js` do `krloc-api-v1` (`npm run test:sso`, 83 asserções). As
 duas suítes ponta a ponta rodam contra a stack de pé, criam o que precisam e desfazem tudo no fim,
 inclusive quando quebram no meio.

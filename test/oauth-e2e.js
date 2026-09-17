@@ -789,6 +789,81 @@ const verifyWithJwks = async (token) => {
   const tiraDeNovo = await adminReq('DELETE', `/projectuser/${projectId}/${colega.json.id}`, gestorHeaders);
   check('tirar quem ja saiu devolve 404', tiraDeNovo.status === 404, `HTTP ${tiraDeNovo.status}`);
 
+  console.log('\n=== apagar quem nao tem mais projeto ===');
+
+  /* Quem saiu de todos os projetos ainda tem sessao com o SSO, code e refresh
+   * token. Nada disso e acesso, e nada disso pode prender o cadastro: a chave
+   * estrangeira de AuthSession recusava apagar o User e a resposta virava 500. */
+  rodada.usuarios.push(`ocioso-${tag}@exemplo.com`);
+  const ocioso = await api('POST', '/user', { name: 'Ocioso', email: `ocioso-${tag}@exemplo.com` });
+  const sessaoDoOcioso = crypto.randomUUID();
+  await db.query(
+    `INSERT INTO "AuthSession" (id, "userId", "expiresAt")
+     VALUES ($1, $2, (now() AT TIME ZONE 'utc') + interval '1 hour')`,
+    [sessaoDoOcioso, ocioso.json.id],
+  );
+  const refreshDoOcioso = crypto.randomBytes(32).toString('base64url');
+  await db.query(
+    `INSERT INTO "RefreshToken" (id, "tokenHash", "familyId", "userId", "projectId", "authSessionId", "expiresAt")
+     VALUES ($1, $2, $3, $4, $5, $6, (now() AT TIME ZONE 'utc') + interval '1 hour')`,
+    [crypto.randomUUID(), crypto.createHash('sha256').update(refreshDoOcioso).digest('hex'),
+      crypto.randomUUID(), ocioso.json.id, projectId, sessaoDoOcioso],
+  );
+  await db.query(
+    `INSERT INTO "AuthorizationCode"
+       (id, "codeHash", "userId", "projectId", "authSessionId", "redirectUri", "codeChallenge", "expiresAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, (now() AT TIME ZONE 'utc') + interval '5 minutes')`,
+    [crypto.randomUUID(), crypto.randomBytes(32).toString('hex'), ocioso.json.id, projectId,
+      sessaoDoOcioso, REDIRECT, challenge],
+  );
+
+  await api('POST', '/projectuser', { userId: ocioso.json.id, projectId, roleId: papelAdmin.id });
+  const apagaComProjeto = await api('DELETE', `/user/${ocioso.json.id}`);
+  const sessoesDepoisDaRecusa = (await db.query(
+    'SELECT count(*)::int AS n FROM "AuthSession" WHERE "userId" = $1', [ocioso.json.id],
+  )).rows[0].n;
+  check('quem ainda tem projeto nao se apaga (400), e nada dela e tocado',
+    apagaComProjeto.status === 400 && sessoesDepoisDaRecusa === 1,
+    `HTTP ${apagaComProjeto.status}, ${sessoesDepoisDaRecusa} sessao(oes)`);
+
+  await api('DELETE', `/projectuser/${projectId}/${ocioso.json.id}`);
+  const apagado = await api('DELETE', `/user/${ocioso.json.id}`);
+  check('sem projeto, apagar passa mesmo com sessao, code e refresh token (204)',
+    apagado.status === 204, `HTTP ${apagado.status}`);
+
+  const sobras = (await db.query(
+    `SELECT
+       (SELECT count(*)::int FROM "User" WHERE id = $1) AS usuario,
+       (SELECT count(*)::int FROM "AuthSession" WHERE "userId" = $1) AS sessoes,
+       (SELECT count(*)::int FROM "RefreshToken" WHERE "userId" = $1 OR "authSessionId" = $2) AS refresh,
+       (SELECT count(*)::int FROM "AuthorizationCode" WHERE "userId" = $1 OR "authSessionId" = $2) AS codes`,
+    [ocioso.json.id, sessaoDoOcioso],
+  )).rows[0];
+  check('a exclusao leva junto a sessao, os refresh tokens e os codes da pessoa',
+    Object.values(sobras).every((n) => n === 0), JSON.stringify(sobras));
+
+  /* RFC 7009 secao 2.1: apagar vale como revogar o grant. O token que ela tinha
+   * na mao nao renova mais nada. */
+  const refreshDeApagado = await tokenReq({
+    grant_type: 'refresh_token', refresh_token: refreshDoOcioso,
+    client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+    client_assertion: clientAssertion(clientId, privateKey),
+  });
+  check('o refresh token de quem foi apagado nao renova mais',
+    refreshDeApagado.status === 400 && refreshDeApagado.json?.error === 'invalid_grant',
+    `HTTP ${refreshDeApagado.status} ${refreshDeApagado.json?.error ?? ''}`);
+
+  const sessaoDeApagado = await api('GET', authorizeQs(), null, {
+    cookie: `sso_session=${sealCookie({ authSessionId: sessaoDoOcioso })}`,
+  });
+  check('a sessao dela no SSO morre junto: o authorize volta a tela de login',
+    sessaoDeApagado.status === 302 && sessaoDeApagado.location === env.SSO_LOGIN_URL,
+    sessaoDeApagado.location ?? `HTTP ${sessaoDeApagado.status}`);
+
+  const apagarUsuarioDeNovo = await api('DELETE', `/user/${ocioso.json.id}`);
+  check('apagar quem ja saiu do banco devolve 404', apagarUsuarioDeNovo.status === 404,
+    `HTTP ${apagarUsuarioDeNovo.status}`);
+
   console.log('\n=== gestao: o overview traz os ids que editar exige ===');
 
   const visao = await api('GET', `/project/${projectId}/overview`);

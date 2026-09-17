@@ -12,6 +12,7 @@ import {
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { Public } from 'src/global/decorator/public.decorator';
 import { GoogleAuthGuard } from 'src/global/guards/googleAuth.guard';
@@ -72,6 +73,9 @@ export class AuthController {
    * a resposta de falha tambem nao seja cacheada.
    */
   @Post('token')
+  // Cada troca verifica assinatura RSA e escreve no banco. Adivinhar asercao de
+  // cliente e inviavel; o limite aqui e contra a repeticao que so consome.
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
@@ -98,6 +102,7 @@ export class AuthController {
    * oraculo sobre quais tokens existem.
    */
   @Post('revoke')
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
   async revoke(@Body() body: Revoke): Promise<void> {

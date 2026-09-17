@@ -50,7 +50,7 @@ Em container, `docker compose up -d --build` na raiz deste repositório, com a c
 `.env.docker`. O compose sobe só o SSO e as migrations. Cada aplicação sobe o próprio compose, no
 próprio repositório, e chega a este serviço pela porta da máquina, `host.docker.internal:8080`.
 
-`npm run test:oauth` sobe 149 asserções contra o servidor rodando: ordem dos erros do authorize,
+`npm run test:oauth` sobe 155 asserções contra o servidor rodando: ordem dos erros do authorize,
 formato dos erros do token endpoint, PKCE, autenticação de cliente, verificação do access token
 contra o JWKS, uso único do code, rotação de refresh token, revogação pelos dois tipos de token, a
 autorização administrativa vinda do banco, a raiz e o 404 de rota negada, papéis de nome livre, troca
@@ -416,6 +416,7 @@ papéis de gestão; até lá, só a raiz a alcança.
 | `REFRESH_TOKEN_TTL` | segundos. É teto absoluto, nunca estendido na rotação. Hoje 90 dias |
 | `AUTH_SESSION_TTL` | segundos. Hoje 90 dias. **Tem de ser ≥ `REFRESH_TOKEN_TTL`** |
 | `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `GOOGLE_CALLBACK_URL` | credenciais do GCP |
+| `TRUST_PROXY` | quantos saltos de proxy confiar no `X-Forwarded-For`. Sem ela, o limite de requisições conta todo mundo como o proxy; ligada sem proxy na frente, qualquer um escolhe o próprio IP |
 
 ⚠️ Perder `KEY_ENCRYPTION_KEY` invalida todas as chaves de assinatura gravadas.
 `ConfigModule` é importado **sem `.forRoot()`**; o `.env` chega ao `process.env` porque
@@ -457,16 +458,19 @@ por teste em `test/oauth-e2e.js`.
 
 1. **`global/dto/jwtPayload.dto.ts`** (`sub/projectId/role/routes`) não corresponde ao payload
    realmente assinado. Tipo morto.
-2. **Sem CORS, helmet nem throttler.** Sem throttler, as rotas administrativas não têm limite de
-   tentativa; hoje isso pesa menos, porque forjar um Bearer exige a chave privada do AS.
+2. **Sem CORS, de propósito.** Console e API vivem na mesma origem (proxy do nginx em container,
+   rewrite do hosting em produção), então não há requisição entre origens para liberar. Abrir CORS
+   aqui só criaria superfície. `helmet` e o limite de requisições entraram; ver `PENTEST.md`.
 3. **`jti` da asserção de cliente não é registrado.** A RFC 7523 §3 trata isso como MAY, e reapresentar
    a asserção sozinha não rende nada porque o code já é de uso único. Vale rever se surgir outro grant.
-4. **`PaginationConfig`**: `numberFormatter(1, 10, limit)` dá **piso 10** e **teto ilimitado** ao `limit`.
+4. **`PaginationConfig`**: piso 10 e teto 500 (`MAX_LIMIT`). O teto entrou na revisão de segurança:
+   sem ele, `?limit=1000000` devolvia o catálogo inteiro numa resposta.
 5. **`getProjecIdByClientId`** — typo, no `ProjectService`.
-6. **`RouteService.normalizePath`** usa `/^(\/api)|(\/v1)/gm`: o `^` vale só para `/api`, e `/v1` é
-   removido em qualquer posição.
-7. **Não há rotina agendada** chamando `purgeExpired()` de `AuthorizationCodeService` e
-   `AuthSessionService`. As linhas expiradas acumulam.
+6. **Não há rotina agendada** chamando `purgeExpired()` de `AuthorizationCodeService` e
+   `AuthSessionService`. As linhas expiradas acumulam. O método da sessão já apaga os dependentes
+   antes, então a rotina, quando existir, não vai esbarrar na chave estrangeira.
+7. **Não há trilha de auditoria** das ações administrativas: as tabelas guardam o estado, não quem o
+   mudou. É o item de maior prioridade no `PENTEST.md`.
 8. **Rota administrativa nova não entra sozinha no catálogo do SSO.** A raiz a alcança no mesmo
    deploy; os papéis de gestão, só depois que ela for cadastrada no projeto `SSO` e concedida a eles.
    Até lá eles recebem 404. Falha fechado, que é o lado certo de errar.
@@ -516,6 +520,26 @@ por teste em `test/oauth-e2e.js`.
   `PUT` e `DELETE /sso/projectuser/:projectId/:userId`.
 - **`bootstrap-sso.js`, `register-app.js` e `operator-token.js` saíram.** Clonar o repositório dava a
   qualquer um o catálogo inteiro e o caminho para se tornar administrador de um banco novo.
+- **Rodada de segurança de 17/09/2026** (detalhe, nota e vetor CVSS em [`PENTEST.md`](PENTEST.md)):
+  - dependências de produção com vulnerabilidade conhecida, 17 delas altas, zeradas com `npm audit fix`
+    e `overrides` (`multer`, `mysql2`, `deepmerge-ts`). ⚠️ subir `@nestjs/core` sem subir
+    `@nestjs/common` junto derruba o boot com `Cannot find module '…/sse-signal.decorator'`;
+  - **limite de requisições** por origem, com `@nestjs/throttler`: 600/min geral e 120/min no token
+    endpoint e no revoke, com o guard antes do de acesso;
+  - **`helmet`** com política fechada (`default-src 'none'`), `X-Frame-Options: DENY`,
+    `Referrer-Policy: same-origin`, e `X-Powered-By` fora;
+  - **teto de 500 no `limit`** da paginação;
+  - **`normalizePath`** tirava `/v1` de qualquer posição do caminho, e uma permissão passava a valer
+    para outra rota. Agora só o prefixo, e só como segmento inteiro;
+  - **`purgeExpired()` da sessão** apagava a linha com dependente e falhava inteira; agora apaga code
+    e refresh token antes, em transação.
+- **Usuário sem projeto não se apagava.** A `AuthSession` dele segurava a linha, o banco recusava e a
+  resposta virava 500. Agora `DELETE /sso/user/:id` roda em transação, com a pessoa e as sessões dela
+  travadas, e leva junto sessões, refresh tokens e authorization codes — o que equivale a revogar cada
+  grant (RFC 7009 §2.1). O vínculo com projeto continua barrando, com 400.
+- **Projeto novo nascia sem o papel `SUPERADMIN`.** `DEFAULT_ROLE_NAMES` tinha três nomes, a
+  documentação e o teste esperavam quatro, e os projetos do banco tinham os quatro. O nome não dá
+  poder nenhum: a raiz é o `SUPERADMIN` do projeto `SSO`, conferido por nome de projeto.
 - **Erro redirecionado voltava sem `iss`.** A RFC 9207 §2 o exige em toda resposta de autorização,
   inclusive a de erro, e o `AuthorizeRedirectExceptionFilter`, que devolve o `access_denied` de quem
   não tem papel no projeto, mandava só `error`, `error_description` e `state`. O discovery também

@@ -119,7 +119,17 @@ export class RouteService {
     await this.prisma.route.delete({ where: { id } });
   }
 
+  /**
+   * Tira do caminho o prefixo que a aplicacao ja removeu antes de perguntar
+   * pela permissao: `/api` ou `/v1`, e so no comeco.
+   *
+   * O `^` da versao anterior valia so para a primeira alternativa, entao `/v1`
+   * saia de qualquer posicao: `/report/v1/summary` virava `/report/summary` no
+   * catalogo. O pedido real a `/report/v1/summary` deixava de casar e respondia
+   * 404 para todo mundo, e pior, quem ganhasse esse caminho passava a alcancar
+   * `/report/summary`, que e outra rota.
+   */
   private normalizePath(path: string): string {
-    return path.replace(/^(\/api)|(\/v1)/gm, '');
+    return path.replace(/^\/(api|v1)(?=\/|$)/, '');
   }
 }

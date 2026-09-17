@@ -75,11 +75,37 @@ export class AuthSessionService {
     });
   }
 
+  /**
+   * Housekeeping: sessao vencida ha mais de um dia nao serve mais a ninguem.
+   *
+   * O refresh token e o authorization code apontam para a sessao, entao saem
+   * antes dela. Apagar so a `AuthSession` batia na chave estrangeira e a
+   * limpeza inteira falhava, sem limpar nada.
+   */
   async purgeExpired(): Promise<number> {
-    const { count } = await this.prisma.authSession.deleteMany({
-      where: { expiresAt: { lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
-    });
+    const corte = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-    return count;
+    return this.prisma.$transaction(async (tx) => {
+      const vencidas = await tx.authSession.findMany({
+        where: { expiresAt: { lt: corte } },
+        select: { id: true },
+      });
+      const ids = vencidas.map((sessao) => sessao.id);
+
+      if (ids.length === 0) return 0;
+
+      await tx.authorizationCode.deleteMany({
+        where: { authSessionId: { in: ids } },
+      });
+      await tx.refreshToken.deleteMany({
+        where: { authSessionId: { in: ids } },
+      });
+
+      const { count } = await tx.authSession.deleteMany({
+        where: { id: { in: ids } },
+      });
+
+      return count;
+    });
   }
 }
