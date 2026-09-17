@@ -4,7 +4,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import * as crypto from 'node:crypto';
-import { ClientKey } from 'generated/prisma/client';
+type ClientKey = {
+  id: string;
+  projectId: string;
+  publicKeyPem: string;
+  expiresAt: Date | null;
+  createdAt: Date;
+  revokedAt: Date | null;
+};
 import { PrismaService } from 'src/global/prisma/prisma.service';
 import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
 import { assertSelfWriter } from 'src/global/access/selfProjectProtection';
@@ -26,8 +33,16 @@ import { GeneratedClientKey } from '../dto/generatedClientKey.dto';
 export class ClientKeyService {
   constructor(private prisma: PrismaService) {}
 
+  private get clientKey() {
+    return (this.prisma as PrismaService & { clientKey: any }).clientKey;
+  }
+
+  private get project() {
+    return (this.prisma as PrismaService & { project: any }).project;
+  }
+
   async findByProject(projectId: string): Promise<ClientKey[]> {
-    const keys = await this.prisma.clientKey.findMany({
+    const keys: ClientKey[] = await this.prisma.clientKey.findMany({
       where: { projectId },
       orderBy: { createdAt: 'desc' },
     });
@@ -43,7 +58,7 @@ export class ClientKeyService {
     data: CreateClientKey,
     admin: AdminIdentity,
   ): Promise<ClientKey> {
-    const project = await this.prisma.project.findUnique({
+    const project: { id: string } | null = await this.prisma.project.findUnique({
       where: { id: data.projectId },
     });
 
@@ -81,7 +96,7 @@ export class ClientKeyService {
         publicKeyPem: data.publicKeyPem,
         expiresAt: data.expiresAt ? new Date(data.expiresAt) : null,
       },
-    });
+    }) as Promise<ClientKey>;
   }
 
   /**
@@ -98,7 +113,7 @@ export class ClientKeyService {
     projectId: string,
     admin: AdminIdentity,
   ): Promise<GeneratedClientKey> {
-    const project = await this.prisma.project.findUnique({
+    const project: { id: string } | null = await this.prisma.project.findUnique({
       where: { id: projectId },
     });
 
@@ -114,12 +129,14 @@ export class ClientKeyService {
       privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
     });
 
-    const stored = await this.prisma.clientKey.create({
+    const stored: { id: string } = await this.prisma.clientKey.create({
       data: { projectId, publicKeyPem: publicKey },
     });
 
+    const id: string = stored.id;
+
     return {
-      id: stored.id,
+      id,
       projectId,
       publicKeyPem: publicKey,
       privateKeyBase64: Buffer.from(privateKey).toString('base64'),
@@ -127,7 +144,7 @@ export class ClientKeyService {
         'A chave privada aparece uma unica vez e nao fica guardada no SSO. ' +
         'Copie agora, entregue ao dono da aplicacao por canal seguro e limpe ' +
         'o historico. Se ela passar por chat, ticket, commit ou log de CI, ' +
-        'revogue esta chave e gere outra.',
+        'revoque esta chave e gere outra.',
     };
   }
 
@@ -136,7 +153,7 @@ export class ClientKeyService {
    * assinou o que antes de ser descartada.
    */
   async revoke(id: string, admin: AdminIdentity): Promise<void> {
-    const key = await this.prisma.clientKey.findUnique({
+    const key: { projectId: string; revokedAt: Date | null } | null = await this.prisma.clientKey.findUnique({
       where: { id },
       select: { projectId: true, revokedAt: true },
     });
@@ -145,14 +162,16 @@ export class ClientKeyService {
       throw new NotFoundException('Chave nao encontrada ou ja revogada');
     }
 
-    await assertSelfWriter(this.prisma, admin, key.projectId);
+    const projectId: string = key.projectId;
 
-    const { count } = await this.prisma.clientKey.updateMany({
-      where: { id, revokedAt: null },
+    await assertSelfWriter(this.prisma, admin, projectId);
+
+    const result: { count: number } = await this.prisma.clientKey.updateMany({
+      where: { id: { equals: id }, revokedAt: null },
       data: { revokedAt: new Date() },
     });
 
-    if (count === 0) {
+    if (result.count === 0) {
       throw new NotFoundException('Chave nao encontrada ou ja revogada');
     }
   }
