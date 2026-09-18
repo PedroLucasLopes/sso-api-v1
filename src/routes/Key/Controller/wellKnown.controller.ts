@@ -39,6 +39,10 @@ export class WellKnownController {
       token_endpoint: `${this.issuer}/oauth/token`,
       revocation_endpoint: `${this.issuer}/oauth/revoke`,
       revocation_endpoint_auth_methods_supported: ['private_key_jwt'],
+      // RFC 8414 secao 2: anunciado aqui, a aplicacao descobre o endpoint em
+      // vez de fixar a URL. O `sso-client` so introspecta quando o encontra.
+      introspection_endpoint: `${this.issuer}/oauth/introspect`,
+      introspection_endpoint_auth_methods_supported: ['private_key_jwt'],
       // Extensao propria: resolve a claim `roles` do token no conjunto de
       // rotas que o papel libera. Nao e da RFC 8414, mas anunciar aqui evita
       // URL fixa espalhada por aplicacao.
@@ -50,9 +54,9 @@ export class WellKnownController {
       // resposta de autorizacao TEM de anunciar. Sem o anuncio, a secao 2.4
       // recomenda ao cliente descartar resposta com `iss` deste servidor.
       authorization_response_iss_parameter_supported: true,
-      // Reflete o que o token endpoint aceita hoje.
-      // `refresh_token` entra junto com a rotacao de refresh token.
-      grant_types_supported: ['authorization_code'],
+      // Reflete o que o token endpoint aceita hoje, rotacao de refresh token
+      // incluida.
+      grant_types_supported: ['authorization_code', 'refresh_token'],
       // Só S256. `plain` e recusado de proposito (RFC 7636 secao 4.2).
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['private_key_jwt'],

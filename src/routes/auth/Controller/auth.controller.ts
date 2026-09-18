@@ -19,6 +19,7 @@ import { GoogleAuthGuard } from 'src/global/guards/googleAuth.guard';
 import { AuthService } from '../Service/auth.service';
 import { Authorize } from '../dto/authorize.dto';
 import { GoogleUser } from '../dto/googleUser';
+import { Introspect, IntrospectionResponse } from '../dto/introspect.dto';
 import { PermissionSet, ResolvePermissions } from '../dto/permissionSet.dto';
 import { Revoke } from '../dto/revoke.dto';
 import { Token } from '../dto/token.dto';
@@ -107,6 +108,26 @@ export class AuthController {
   @Header('Cache-Control', 'no-store')
   async revoke(@Body() body: Revoke): Promise<void> {
     await this.authService.revokeToken(body);
+  }
+
+  /**
+   * Introspection endpoint (RFC 7662): a aplicacao pergunta se o access token
+   * ainda vale e qual e o papel da pessoa agora.
+   *
+   * Token invalido, vencido, de outro cliente ou de grant encerrado responde 200
+   * com `{ active: false }`, que e o que a secao 2.2 manda; so cliente que nao
+   * se autentica recebe erro, 401 (secao 2.3).
+   *
+   * O limite e maior que o do token endpoint porque quem chama e o servidor da
+   * aplicacao, de um IP so, uma vez por sessao ativa a cada janela de cache:
+   * 1200 por minuto cobrem 600 sessoes ativas com janela de 30 segundos.
+   */
+  @Post('introspect')
+  @Throttle({ default: { limit: 1200, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  async introspect(@Body() body: Introspect): Promise<IntrospectionResponse> {
+    return this.authService.introspect(body);
   }
 
   /** Encerra a sessao no SSO e revoga os refresh tokens de todos os projetos. */

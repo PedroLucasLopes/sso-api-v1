@@ -11,6 +11,9 @@ export class AuthorizationServerMetadata {
   /** RFC 7009 secao 5: anunciado junto dos demais. */
   revocation_endpoint: string;
   revocation_endpoint_auth_methods_supported: string[];
+  /** RFC 7662, anunciado como manda a RFC 8414 secao 2. */
+  introspection_endpoint: string;
+  introspection_endpoint_auth_methods_supported: string[];
   /** Extensao propria, fora da RFC 8414. Resolve `roles` em permissoes. */
   permissions_endpoint: string;
   jwks_uri: string;

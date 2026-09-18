@@ -50,12 +50,13 @@ Em container, `docker compose up -d --build` na raiz deste repositório, com a c
 `.env.docker`. O compose sobe só o SSO e as migrations. Cada aplicação sobe o próprio compose, no
 próprio repositório, e chega a este serviço pela porta da máquina, `host.docker.internal:8080`.
 
-`npm run test:oauth` sobe 155 asserções contra o servidor rodando: ordem dos erros do authorize,
+`npm run test:oauth` sobe 166 asserções contra o servidor rodando: ordem dos erros do authorize,
 formato dos erros do token endpoint, PKCE, autenticação de cliente, verificação do access token
 contra o JWKS, uso único do code, rotação de refresh token, revogação pelos dois tipos de token, a
 autorização administrativa vinda do banco, a raiz e o 404 de rota negada, papéis de nome livre, troca
 e remoção de membro, a tela de login do IdP, o login do console e a escrita pela sessão com CSRF, a
-exclusão de redirect URI e a proteção do projeto SSO. **Rode depois de qualquer mudança em
+exclusão de redirect URI, a proteção do projeto SSO, a exclusão de conta sem projeto e a
+introspecção. **Rode depois de qualquer mudança em
 `routes/auth/` ou em `global/access/`.**
 
 `npx jest` roda os testes de unidade. Hoje cobrem a proteção do projeto SSO, inclusive a regra do
@@ -208,7 +209,26 @@ família viva, que é o oposto do pedido.
 ⚠️ **O access token já emitido continua verificando até expirar.** Ele é assinado e conferido sem
 consulta ao servidor, que é o que torna a arquitetura barata: o RP não fala com o SSO a cada
 requisição. A RFC 10017 §6.2.4 reconhece esse limite. A mitigação é ele ser curto, 15 minutos, e é
-por isso que esse número não deve crescer.
+por isso que esse número não deve crescer. Para quem pergunta ao SSO, a janela é outra: a
+introspecção, abaixo, a encurta para 30 segundos no `sso-client`.
+
+**`POST /oauth/introspect`** — RFC 7662. A aplicação pergunta se o grant do token vale e qual é o
+papel **agora**. Autentica o cliente por `private_key_jwt`, como o token endpoint. Responde só
+`{ "active": false }` se faltar qualquer uma destas coisas:
+
+- assinatura, `iss` e `aud` do próprio cliente;
+- `exp` no futuro;
+- sessão viva da mesma pessoa;
+- papel no projeto;
+- um refresh token vivo no grant.
+
+A última é a que torna a revogação completa: logout e revogação derrubam a família, e o access token do
+mesmo grant passa a responder inativo junto, como a RFC 7009 §2.1 pede. Ativo devolve `roles` e `perm`
+lidos do banco, extensões que a RFC 7662 §2.2 permite. Token de outro cliente responde inativo e não
+erro (§2.2). Só o cliente que não se autentica recebe 401 (§2.3), o que inclui aplicação suspensa ou
+com a chave revogada. O limite é próprio, 1200 por minuto por origem, porque cada sessão ativa de
+cada aplicação pergunta a cada 30 segundos. Passando dele, o `sso-client` decide pelo token, como
+fazia antes da introspecção, até a janela seguinte.
 
 **`POST /oauth/token`** — autentica o cliente por `private_key_jwt`, consome o code atomicamente,
 verifica PKCE em tempo constante, confere `redirect_uri` e emite o par de tokens. A `redirect_uri` do
@@ -249,8 +269,12 @@ RFC 7009 §2.1 ficaria por cumprir.
 rotas via `POST /oauth/permissions` e guarda o conjunto pela chave papel mais hash. Como o hash só
 muda no token quando ele renova, o `sso-client` ainda pergunta de novo antes de negar uma rota e não
 guarda nenhum conjunto por mais de 60 segundos: permissão concedida vale na requisição seguinte, e a
-revogada, em até um minuto. Papel que não existe mais responde 404 ali, e o cliente o trata como
-conjunto vazio.
+revogada, em até um minuto, ou em 30 segundos pela introspecção, que devolve o `perm` de agora. Papel
+que não existe mais responde 404 ali, e o cliente o trata como conjunto vazio.
+
+`roles` e `perm` são uma fotografia do momento da emissão. Quem decide com eles sem perguntar ao SSO
+decide pelo papel de até 15 minutos atrás. A introspecção devolve os dois lidos do banco, e o
+`sso-client` troca o token pela sessão assim que eles divergem.
 
 ---
 
@@ -378,7 +402,7 @@ as outras aplicações.
 | GET | `/sso/.well-known/jwks.json` | público |
 | GET | `/sso/.well-known/oauth-authorization-server` | público |
 | GET | `/sso/oauth/authorize` · `/sso/oauth/google` · `/sso/oauth/google/callback` | público |
-| POST | `/sso/oauth/token` · `/sso/oauth/revoke` · `/sso/oauth/permissions` | público, exige `private_key_jwt` |
+| POST | `/sso/oauth/token` · `/sso/oauth/revoke` · `/sso/oauth/permissions` · `/sso/oauth/introspect` | público, exige `private_key_jwt` |
 | POST | `/sso/oauth/logout` | público |
 | GET | `/sso/login/request` | público, o pedido pendente que a tela de login atende |
 | GET | `/sso/session` · `/sso/session/login` | público: estado da sessão e login do console |
@@ -520,12 +544,18 @@ por teste em `test/oauth-e2e.js`.
   `PUT` e `DELETE /sso/projectuser/:projectId/:userId`.
 - **`bootstrap-sso.js`, `register-app.js` e `operator-token.js` saíram.** Clonar o repositório dava a
   qualquer um o catálogo inteiro e o caminho para se tornar administrador de um banco novo.
+- **Mudança no SSO só chegava à aplicação na renovação do token.** Papel trocado, pessoa tirada do
+  projeto, aplicação suspensa e logout só pesavam quando o access token vencia, em até 15 minutos.
+  Agora há `POST /oauth/introspect` (RFC 7662), anunciado no discovery, e o `sso-client` 0.4.0
+  pergunta a ele: a janela caiu para 30 segundos, com token novo emitido na hora quando o papel muda.
+  O discovery também passou a anunciar `refresh_token` em `grant_types_supported`, que o token
+  endpoint já aceitava.
 - **Rodada de segurança de 17/09/2026** (detalhe, nota e vetor CVSS em [`PENTEST.md`](PENTEST.md)):
   - dependências de produção com vulnerabilidade conhecida, 17 delas altas, zeradas com `npm audit fix`
     e `overrides` (`multer`, `mysql2`, `deepmerge-ts`). ⚠️ subir `@nestjs/core` sem subir
     `@nestjs/common` junto derruba o boot com `Cannot find module '…/sse-signal.decorator'`;
-  - **limite de requisições** por origem, com `@nestjs/throttler`: 600/min geral e 120/min no token
-    endpoint e no revoke, com o guard antes do de acesso;
+  - **limite de requisições** por origem, com `@nestjs/throttler`: 600/min geral, 120/min no token
+    endpoint e no revoke e 1200/min na introspecção, com o guard antes do de acesso;
   - **`helmet`** com política fechada (`default-src 'none'`), `X-Frame-Options: DENY`,
     `Referrer-Policy: same-origin`, e `X-Powered-By` fora;
   - **teto de 500 no `limit`** da paginação;
@@ -555,6 +585,9 @@ por teste em `test/oauth-e2e.js`.
   do `issuer` do discovery (RFC 9207 §2 e §2.3).
 - Authorization code de uso único, com vida em segundos.
 - Refresh token rotativo, com teto absoluto herdado pela família.
+- A introspecção só responde ativo com sessão viva, papel no projeto e refresh token vivo no grant, e
+  inativo nunca diz por quê (RFC 7662 §2.2). Tirar a exigência do refresh token faz o logout voltar a
+  ser cosmético para o access token já emitido.
 - Chave privada de assinatura nunca sai do processo em claro nem vai para o banco em claro.
 - Rode `npm run test:oauth` depois de mexer em `routes/auth/` ou em `global/access/`.
 - Rota administrativa nova **não** ganha decorator de nível: ela entra no catálogo do projeto `SSO`,

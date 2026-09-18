@@ -47,6 +47,7 @@ A linha que separa o que sai do que fica: **o access token sai, o refresh token 
                              |         |   /oauth/authorize          |
         redirects do usuario |         |   /oauth/token              |
         ---------------------|-------->|   /oauth/revoke             |
+                             |         |   /oauth/introspect         |
                              |         |   /.well-known/jwks.json    |
                              |         +--------------+--------------+
                              |                        |
@@ -61,7 +62,8 @@ A linha que separa o que sai do que fica: **o access token sai, o refresh token 
 
 O que isso custa, e a RFC diz na cara (§6.2.4): com o access token fora do servidor, quem roubar o
 token tem acesso direto aos recursos pelo tempo de vida dele. É por isso que ele dura 15 minutos e
-que o refresh token, que dura 14 dias, fica para trás.
+que o refresh token, que dura 90 dias, fica para trás. Revogar o grant encurta essa janela para 30
+segundos na aplicação que pergunta ao SSO pela introspecção (seção 3).
 
 ### Depois do login: pegando o token
 
@@ -77,6 +79,11 @@ que o refresh token, que dura 14 dias, fica para trás.
       |                                       | sim: renova ----------->|
       |                                       |     grant_type=refresh  |
       |                                       |<------------------------|
+      |                                       | o grant vale? --------->|
+      |                                       |     /oauth/introspect   |
+      |                                       |<------------------------|
+      |                                       | inativo: 401            |
+      |                                       | papel mudou: renova     |
       |                                       |                         |
       |  200 Cache-Control: no-store          |                         |
       |  {access_token, token_type: "Bearer", |                         |
@@ -88,6 +95,7 @@ que o refresh token, que dura 14 dias, fica para trás.
       | Authorization: Bearer <access_token>  |                         |
       |-------------------------------------->|                         |
       |                                       | verifica contra o JWKS  |
+      |                                       | grant vale? cada 30s -->|
       |                                       | casa a permissao        |
       |<--------------------------------------| 200                     |
       |                                       |                         |
@@ -239,7 +247,8 @@ O caminho curto. É o que acontece em quase toda requisição.
       |                        sim -> usa ele e pula ao passo 3       |
       |                                |                              |
       |                     1. decifra o cookie                       |
-      |                        sem cookie e sem Bearer -> 401         |
+      |                        sem cookie nem Bearer -> 302 ou 401    |
+      |                        escrita sem X-CSRF-Token -> 403        |
       |                                |                              |
       |                     2. expira em < 60s?                       |
       |                        sim ---------------------------------->|
@@ -257,14 +266,28 @@ O caminho curto. É o que acontece em quase toda requisição.
       |                        . iss == issuer                        |
       |                        . aud == clientId                      |
       |                        . exp > agora                          |
+      |                        nao verificou e veio da sessao: renova |
+      |                        e confere de novo; so entao, login     |
       |                                |                              |
-      |                     4. veio do cookie? preenche o header      |
+      |                     4. o grant ainda vale? (RFC 7662)         |
+      |                        uma vez por token a cada 30s --------->|
+      |                             POST /oauth/introspect            |
+      |                             token + client_assertion          |
+      |                        <-----------------------------------   |
+      |                             active, roles e perm de AGORA     |
+      |                        . inativo -> a sessao cai; Bearer, 401 |
+      |                        . papel mudou -> decide pelo de agora  |
+      |                          e, pela sessao, renova o token       |
+      |                          nesta mesma resposta                 |
+      |                                |                              |
+      |                     5. veio do cookie? preenche o header      |
       |                        Authorization: Bearer <token>          |
       |                        (so DEPOIS de verificar)               |
       |                                |                              |
-      |                     5. RBAC: casa metodo + caminho            |
-      |                        contra claims.permissions[]            |
-      |                                |                              |
+      |                     6. papel -> rotas ----------------------->|
+      |                             POST /oauth/permissions           |
+      |                             (cacheado por papel + hash perm)  |
+      |                        casa metodo + caminho                  |
       |                        quem vira regex e a PERMISSAO.         |
       |                        o caminho da requisicao e sempre       |
       |                        so o texto testado.                    |
@@ -274,8 +297,15 @@ O caminho curto. É o que acontece em quase toda requisição.
       |                     +----------+-----------+                  |
       |<-------------------------------| 200                          |
       |                                |                              |
-      |                        sem permissao -> 403                   |
+      |                        sem permissao -> 404, como caminho     |
+      |                        que nao existe                         |
 ```
+
+O passo 4 é o que faz o console valer na aplicação sem esperar o token vencer. O access token diz o
+papel de quando foi emitido; a introspecção diz o de agora, lido do banco do SSO. É uma pergunta por
+token a cada 30 segundos (`APP_GRANT_CHECK_SECONDS`), e sempre em `/auth/me` e `/auth/token`. Sem
+resposta do SSO, vale o último estado conhecido: a checagem nunca derruba sessão por falta de
+resposta. A exceção é o 401, que o SSO só dá quando a aplicação foi suspensa ou teve a chave revogada.
 
 ---
 
@@ -343,8 +373,10 @@ Sem `ProjectUser` no segundo projeto, o SSO devolve `access_denied` pela `redire
 ```
 
 Limpar o cookie sozinho seria cosmético: com sessão client-side, qualquer outra cópia do cookie
-continuaria renovando para sempre. O access token já emitido segue válido até expirar, o que é
-inerente a token assinado e sem consulta. É por isso que ele dura 15 minutos.
+continuaria renovando para sempre. O access token já emitido continua passando na assinatura até
+expirar, o que é inerente a token assinado. É por isso que ele dura 15 minutos. Na aplicação que
+pergunta ao SSO, ele cai antes: sem refresh token vivo no grant, a introspecção responde inativo, e a
+cópia guardada antes do logout deixa de abrir a API em até 30 segundos (RFC 7009 §2.1).
 
 O 200 para token desconhecido é deliberado (RFC 7009 §2.2): responder 404 transformaria o endpoint
 num oráculo sobre quais tokens existem.
@@ -359,10 +391,10 @@ num oráculo sobre quais tokens existem.
 |---|---|---|---|
 | `GET /api/auth/login` | nada | navegador | `Set-Cookie app_tx` + 302 para o authorize |
 | `GET /api/auth/callback` | `code`, `state`, `iss` | **SSO**, servidor a servidor | `Set-Cookie app_session` + 302 para o app |
-| `GET /api/auth/token` | cookie | **SSO**, só se precisar renovar | `access_token`, `expires_in`, sem refresh |
+| `GET /api/auth/token` | cookie | **SSO** `/oauth/introspect` sempre; `/oauth/token` se precisar renovar | `access_token`, `expires_in`, sem refresh |
 | `POST /api/auth/logout` | cookie | **SSO** `/oauth/revoke` | 204, cookies apagados |
-| `GET /api/auth/me` | cookie ou Bearer | nada | identidade e permissões |
-| _qualquer outra_ | cookie ou Bearer | JWKS do SSO, se preciso | 200, 401 ou 403 |
+| `GET /api/auth/me` | cookie ou Bearer | **SSO** `/oauth/introspect` sempre | identidade, permissões e token anti-CSRF |
+| _qualquer outra_ | cookie ou Bearer | JWKS se preciso, `/oauth/introspect` a cada 30 s por token, `/oauth/permissions` por papel | 200, 401 ou 404 |
 
 ### Camada do SSO
 
@@ -373,6 +405,8 @@ num oráculo sobre quais tokens existem.
 | `GET /oauth/google/callback` | `code` e `state` do Google | `User`, cria `AuthSession` e `AuthorizationCode` | 302 para a `redirect_uri` |
 | `POST /oauth/token` | grant + `client_assertion` | `ClientKey`, `AuthorizationCode`, `RefreshToken`, `SigningKey`, RBAC | JSON com os dois tokens |
 | `POST /oauth/revoke` | token + `client_assertion` | `RefreshToken` | 200 sempre |
+| `POST /oauth/introspect` | token + `client_assertion` | `ClientKey`, `AuthSession`, `ProjectUser`, `RefreshToken`, RBAC | `{ active: false }`, ou `active` com `roles` e `perm` de agora |
+| `POST /oauth/permissions` | papel + `client_assertion` | `Role`, `Permission`, `Route` | as rotas do papel, ou 404 |
 | `GET /.well-known/jwks.json` | nada | `SigningKey` | chaves públicas |
 | `GET /.well-known/oauth-authorization-server` | nada | — | metadados (RFC 8414) |
 

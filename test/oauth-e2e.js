@@ -418,6 +418,90 @@ const verifyWithJwks = async (token) => {
   const lifetime = v.payload.exp - v.payload.iat;
   check('access token curto (<= 15 min)', lifetime <= 900, `${lifetime}s`);
 
+  console.log('\n=== introspeccao (RFC 7662): o que muda no SSO chega sem novo login ===');
+
+  /* Uma pessoa so para isto, com sessao propria: trocar o papel, revogar e tirar
+   * do projeto nao pode mexer nos tokens que o resto da suite usa. */
+  rodada.usuarios.push(`introspeccao-${tag}@exemplo.com`);
+  const inspecionado = await api('POST', '/user', { name: 'Introspeccao', email: `introspeccao-${tag}@exemplo.com` });
+  await api('POST', '/projectuser', { userId: inspecionado.json.id, projectId, roleId: papelAdmin.id });
+  const sessaoInspecionada = crypto.randomUUID();
+  await db.query(
+    `INSERT INTO "AuthSession" (id, "userId", "expiresAt")
+     VALUES ($1, $2, (now() AT TIME ZONE 'utc') + interval '1 hour')`,
+    [sessaoInspecionada, inspecionado.json.id],
+  );
+  const cookieInspecionado = `sso_session=${sealCookie({ authSessionId: sessaoInspecionada })}`;
+  const asercao = () => ({
+    client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+    client_assertion: clientAssertion(clientId, privateKey),
+  });
+  const parDoInspecionado = async () => {
+    const autorizou = await api('GET', authorizeQs(), null, { cookie: cookieInspecionado });
+    const codigo = autorizou.location ? new URL(autorizou.location).searchParams.get('code') : null;
+    return tokenReq({ grant_type: 'authorization_code', code: codigo, code_verifier: verifier, redirect_uri: REDIRECT, ...asercao() });
+  };
+  const introspectar = async (token, autenticar = true) => {
+    const r = await fetch(`${BASE}/oauth/introspect`, form({ token, token_type_hint: 'access_token', ...(autenticar ? asercao() : {}) }));
+    return { status: r.status, json: await r.json().catch(() => null), cacheControl: r.headers.get('cache-control') };
+  };
+
+  const metadadosIntrospeccao = await (await fetch(`${BASE}/.well-known/oauth-authorization-server`)).json();
+  check('discovery anuncia introspection_endpoint (RFC 8414 secao 2)',
+    metadadosIntrospeccao.introspection_endpoint === `${BASE}/oauth/introspect`,
+    String(metadadosIntrospeccao.introspection_endpoint));
+
+  const primeiroPar = await parDoInspecionado();
+  const ativo = await introspectar(primeiroPar.json?.access_token);
+  check('token valido: active, com o papel e o sub da pessoa',
+    ativo.status === 200 && ativo.json?.active === true
+      && JSON.stringify(ativo.json?.roles) === JSON.stringify(['ADMIN'])
+      && ativo.json?.sub === inspecionado.json.id && ativo.json?.client_id === clientId,
+    JSON.stringify(ativo.json));
+  check('resposta da introspeccao nao vai para cache', ativo.cacheControl === 'no-store', ativo.cacheControl ?? 'ausente');
+
+  // Troca de papel no console: o token continua dizendo ADMIN, a introspeccao nao.
+  const papelViewer = papeisDoProjeto.find((r) => r.name === 'VIEWER');
+  await api('PUT', `/projectuser/${projectId}/${inspecionado.json.id}`, { roleId: papelViewer.id });
+  const depoisDaTroca = await introspectar(primeiroPar.json?.access_token);
+  check('trocado o papel, a introspeccao ja responde o papel novo',
+    depoisDaTroca.json?.active === true && JSON.stringify(depoisDaTroca.json?.roles) === JSON.stringify(['VIEWER']),
+    JSON.stringify(depoisDaTroca.json?.roles));
+  check('e o perm do conjunto novo, diferente do que ficou no token',
+    typeof depoisDaTroca.json?.perm === 'string' && depoisDaTroca.json.perm !== ativo.json?.perm,
+    `${ativo.json?.perm} -> ${depoisDaTroca.json?.perm}`);
+
+  const renovado = await tokenReq({ grant_type: 'refresh_token', refresh_token: primeiroPar.json?.refresh_token, ...asercao() });
+  const claimsRenovadas = renovado.json?.access_token ? (await verifyWithJwks(renovado.json.access_token)).payload : null;
+  check('o token renovado ja sai com o papel novo',
+    JSON.stringify(claimsRenovadas?.roles) === JSON.stringify(['VIEWER']), JSON.stringify(claimsRenovadas?.roles));
+
+  const deOutroCliente = await introspectar(ADMIN.authorization?.slice('Bearer '.length));
+  check('token de outro cliente responde inativo, sem dizer mais nada (RFC 7662 secao 4)',
+    deOutroCliente.status === 200 && JSON.stringify(deOutroCliente.json) === JSON.stringify({ active: false }),
+    JSON.stringify(deOutroCliente.json));
+
+  const lixo = await introspectar('isto.nao.e-um-token');
+  check('token que nao verifica responde inativo', lixo.status === 200 && lixo.json?.active === false, JSON.stringify(lixo.json));
+
+  const semCliente = await introspectar(renovado.json?.access_token, false);
+  check('introspeccao exige autenticacao de cliente (RFC 7662 secao 2.3)', semCliente.status === 401, `HTTP ${semCliente.status}`);
+
+  // Revogar o grant derruba o access token do mesmo grant (RFC 7009 secao 2.1).
+  await fetch(`${BASE}/oauth/revoke`, form({ token: renovado.json?.refresh_token, token_type_hint: 'refresh_token', ...asercao() }));
+  const aposRevogar = await introspectar(renovado.json?.access_token);
+  check('revogado o grant, o access token dele fica inativo antes de expirar',
+    aposRevogar.json?.active === false, JSON.stringify(aposRevogar.json));
+
+  // Tirar do projeto: e o corte de privilegio que precisa valer na hora.
+  const segundoPar = await parDoInspecionado();
+  const antesDeTirar = await introspectar(segundoPar.json?.access_token);
+  await api('DELETE', `/projectuser/${projectId}/${inspecionado.json.id}`);
+  const depoisDeTirar = await introspectar(segundoPar.json?.access_token);
+  check('tirada do projeto, a pessoa perde o token ativo na introspeccao seguinte',
+    antesDeTirar.json?.active === true && depoisDeTirar.json?.active === false,
+    `${antesDeTirar.json?.active} -> ${depoisDeTirar.json?.active}`);
+
   console.log('\n=== uso unico e deteccao de replay ===');
   const replay = await tokenReq({
     grant_type: 'authorization_code', code: code2, code_verifier: verifier, redirect_uri: REDIRECT,

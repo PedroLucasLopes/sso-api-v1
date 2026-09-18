@@ -240,8 +240,8 @@ Os diagramas do fluxo, no estilo da RFC 6749, estão em [`arquitetura-oauth.md`]
 camadas, login completo, requisição autenticada, single sign-on no segundo app, logout e o portão de
 ativação.
 
-RFCs: 6749 (core), 7009 (revogação), 7523 (client assertion), 7636 (PKCE), 8414 (discovery),
-9207 (issuer na resposta), 9700 (security BCP), 10017 (browser-based apps BCP).
+RFCs: 6749 (core), 7009 (revogação), 7523 (client assertion), 7636 (PKCE), 7662 (introspecção),
+8414 (discovery), 9207 (issuer na resposta), 9700 (security BCP), 10017 (browser-based apps BCP).
 
 ### Feito
 
@@ -329,9 +329,18 @@ RFCs: 6749 (core), 7009 (revogação), 7523 (client assertion), 7636 (PKCE), 841
     requisições por origem, `helmet` com política fechada, teto no `limit` da paginação, política de
     conteúdo completa nos dois fronts, upload com teto no multer e conferência de tipo, e a exclusão de
     usuário que a chave estrangeira travava. Os riscos aceitos estão escritos, com a razão de cada um.
+26. **O que muda no SSO chega à aplicação em até 30 segundos.** Antes, papel trocado, pessoa tirada do
+    projeto, aplicação suspensa e logout só pesavam quando o access token vencia, em até 15 minutos. O
+    SSO ganhou `POST /sso/oauth/introspect` (RFC 7662), e o `sso-client` 0.4.0 pergunta a ele no máximo
+    uma vez por token a cada 30 segundos (`APP_GRANT_CHECK_SECONDS`), e sempre em `/auth/me` e
+    `/auth/token`. Papel diferente do token: a requisição é decidida pelo papel de agora e a sessão
+    recebe um token novo na mesma resposta. Grant inativo: a sessão cai. Os fronts releem `/auth/me` a
+    cada 30 segundos, e na volta à aba, e o menu muda sem recarregar a página. De quebra, o logout deixou
+    de ser cosmético para o access token já emitido, e dois caminhos em que a própria biblioteca
+    renovava duas vezes com o mesmo refresh token, derrubando a sessão por reuso, foram fechados.
 
-Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 155 asserções, e `npx jest` para
-as regras de proteção) e `test/sso-e2e.js` do `krloc-api-v1` (`npm run test:sso`, 83 asserções). As
+Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 166 asserções, e `npx jest` para
+as regras de proteção) e `test/sso-e2e.js` do `krloc-api-v1` (`npm run test:sso`, 91 asserções). As
 duas suítes ponta a ponta rodam contra a stack de pé, criam o que precisam e desfazem tudo no fim,
 inclusive quando quebram no meio.
 
@@ -363,7 +372,8 @@ as rotas de cada um no console; quem tem esses papéis administra as aplicaçõe
 Rota que o papel não alcança responde **404**, como caminho que não existe. Uma pessoa tem um papel
 por projeto. Para tirar o acesso de alguém, tire a pessoa do projeto no console: no SSO o efeito é
 imediato, porque o guard relê o papel a cada requisição, e os refresh tokens dela naquele projeto caem
-junto. O projeto `SSO` nunca fica sem `SUPERADMIN`: o último não troca de papel nem sai.
+junto. Na aplicação, em até 30 segundos, pela introspecção do `sso-client`; trocar o papel vale no
+mesmo prazo, com token novo. O projeto `SSO` nunca fica sem `SUPERADMIN`: o último não troca de papel nem sai.
 
 **O projeto `SSO` em si não se desmonta.** Ele não se apaga, não se renomeia e não sai de `ACTIVE`,
 nem pela raiz. Se isso fosse possível, um clique errado tiraria a administração de todas as aplicações

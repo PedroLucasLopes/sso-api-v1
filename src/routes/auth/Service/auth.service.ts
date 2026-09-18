@@ -20,6 +20,7 @@ import {
 } from '../auth.constant';
 import { Authorize, PKCE_PATTERN } from '../dto/authorize.dto';
 import { GoogleUser } from '../dto/googleUser';
+import { Introspect, IntrospectionResponse } from '../dto/introspect.dto';
 import { LoginRequestView } from '../dto/loginRequest.dto';
 import {
   LoginTransaction,
@@ -620,6 +621,28 @@ export class AuthService {
     token: string,
     clientId: string,
   ): Promise<string | null> {
+    return (await this.accessTokenClaims(token, clientId))?.sid ?? null;
+  }
+
+  /**
+   * As claims de um access token que este servidor emitiu para este cliente,
+   * com a assinatura conferida. `null` para qualquer outra coisa.
+   *
+   * Nao olha `exp`: cada chamador decide. O revoke aceita token vencido, e a
+   * introspeccao nao.
+   */
+  private async accessTokenClaims(
+    token: string,
+    clientId: string,
+  ): Promise<{
+    iss: string;
+    aud: string;
+    sub: string;
+    sid: string;
+    jti?: string;
+    exp?: number;
+    iat?: number;
+  } | null> {
     const partes = token.split('.');
 
     if (partes.length !== 3) return null;
@@ -654,17 +677,113 @@ export class AuthService {
 
     if (!confere) return null;
 
-    const claims = decodificar<{ iss?: string; aud?: string; sid?: string }>(
-      corpo,
-    );
+    const claims = decodificar<{
+      iss?: string;
+      aud?: string;
+      sub?: string;
+      sid?: string;
+      jti?: string;
+      exp?: number;
+      iat?: number;
+    }>(corpo);
 
-    if (!claims?.sid) return null;
+    if (!claims?.sid || !claims.sub) return null;
     if (claims.iss !== this.issuer) return null;
 
-    // Um cliente nao derruba a sessao de outro apresentando um token capturado.
+    // Um cliente nao derruba nem consulta a sessao de outro apresentando um
+    // token capturado.
     if (claims.aud !== clientId) return null;
 
-    return claims.sid;
+    return {
+      iss: claims.iss,
+      aud: claims.aud,
+      sub: claims.sub,
+      sid: claims.sid,
+      jti: claims.jti,
+      exp: claims.exp,
+      iat: claims.iat,
+    };
+  }
+
+  /**
+   * Introspeccao (RFC 7662): o token ainda vale, e qual e o papel da pessoa
+   * agora?
+   *
+   * O access token e assinado e verificado sem consulta, e por isso continuava
+   * valendo ate expirar depois de o SSO mudar de ideia sobre ele: papel
+   * trocado, pessoa tirada do projeto, aplicacao suspensa, logout. Este endpoint
+   * e a consulta que fecha essa janela. A aplicacao pergunta de tempos em tempos
+   * e, quando o papel mudou, pede um token novo na hora.
+   *
+   * Ativo exige tudo isto, e qualquer falta responde so `{ active: false }`:
+   *
+   * - assinatura, `iss` e `aud` deste cliente, e `exp` no futuro;
+   * - a sessao do SSO (`sid`) viva e da mesma pessoa;
+   * - a pessoa ainda com papel no projeto;
+   * - um refresh token vivo no mesmo grant. Logout e revogacao (RFC 7009)
+   *   derrubam a familia, e a secao 2.1 daquela RFC manda o access token do
+   *   mesmo grant cair junto: e aqui que isso passa a valer de verdade;
+   * - o projeto ativo, que `authenticate` ja confere.
+   *
+   * Token de outro cliente responde inativo, e nao erro: a RFC 7662 secao 4
+   * nao quer o endpoint dizendo que o token existe.
+   */
+  async introspect(body: Introspect): Promise<IntrospectionResponse> {
+    const project = await this.clientAuth.authenticate(body);
+    const inativo: IntrospectionResponse = { active: false };
+
+    const claims = await this.accessTokenClaims(body.token, project.clientId);
+
+    if (!claims) return inativo;
+
+    const agora = Math.floor(Date.now() / 1000);
+
+    if (typeof claims.exp !== 'number' || claims.exp <= agora) return inativo;
+
+    const sessao = await this.authSessions.findValid(claims.sid);
+
+    if (!sessao || sessao.userId !== claims.sub) return inativo;
+
+    const vinculo = await this.prisma.projectUser.findUnique({
+      where: { userId_projectId: { userId: claims.sub, projectId: project.id } },
+      include: { role: { select: { name: true } } },
+    });
+
+    if (!vinculo) return inativo;
+
+    const grantVivo = await this.prisma.refreshToken.findFirst({
+      where: {
+        userId: claims.sub,
+        projectId: project.id,
+        authSessionId: claims.sid,
+        revokedAt: null,
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      select: { id: true },
+    });
+
+    if (!grantVivo) return inativo;
+
+    const { hash } = await this.permissionSets.forRole(
+      project.id,
+      vinculo.role.name,
+    );
+
+    return {
+      active: true,
+      client_id: project.clientId,
+      token_type: 'Bearer',
+      sub: claims.sub,
+      aud: claims.aud,
+      iss: claims.iss,
+      jti: claims.jti,
+      exp: claims.exp,
+      iat: claims.iat,
+      sid: claims.sid,
+      roles: [vinculo.role.name],
+      perm: hash,
+    };
   }
   /**
    * Resolve um papel no conjunto de rotas que ele libera.
