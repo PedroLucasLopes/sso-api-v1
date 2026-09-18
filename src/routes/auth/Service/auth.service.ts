@@ -745,7 +745,9 @@ export class AuthService {
     if (!sessao || sessao.userId !== claims.sub) return inativo;
 
     const vinculo = await this.prisma.projectUser.findUnique({
-      where: { userId_projectId: { userId: claims.sub, projectId: project.id } },
+      where: {
+        userId_projectId: { userId: claims.sub, projectId: project.id },
+      },
       include: { role: { select: { name: true } } },
     });
 

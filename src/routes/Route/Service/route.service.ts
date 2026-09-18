@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'src/global/prisma/prisma.service';
 import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
 import { assertSelfWriter } from 'src/global/access/selfProjectProtection';
@@ -7,6 +7,7 @@ import { Route } from 'generated/prisma/client';
 import { PaginationConfig } from 'src/global/pagination/pagination';
 import { CreateRoute } from '../dto/createRoute.dto';
 import { EditRoute } from '../dto/editRoute.dto';
+import { ApiException } from 'src/global/error/apiError';
 
 @Injectable()
 export class RouteService {
@@ -38,7 +39,7 @@ export class RouteService {
     });
 
     if (!routes.length) {
-      throw new NotFoundException('No routes found');
+      throw new ApiException('no_results');
     }
 
     return routes;
@@ -51,7 +52,7 @@ export class RouteService {
     });
 
     if (!route) {
-      throw new NotFoundException('Route not found');
+      throw new ApiException('route_not_found');
     }
 
     return route;
@@ -63,7 +64,7 @@ export class RouteService {
     });
 
     if (!findProject) {
-      throw new NotFoundException('Project not found');
+      throw new ApiException('project_not_found');
     }
 
     await assertSelfWriter(this.prisma, admin, data.projectId);
@@ -82,7 +83,7 @@ export class RouteService {
     const findRoute = await this.prisma.route.findUnique({ where: { id } });
 
     if (!findRoute) {
-      throw new NotFoundException('Route not found');
+      throw new ApiException('route_not_found');
     }
 
     await assertSelfWriter(
@@ -111,7 +112,7 @@ export class RouteService {
     });
 
     if (!findRoute) {
-      throw new NotFoundException('Route not found');
+      throw new ApiException('route_not_found');
     }
 
     await assertSelfWriter(this.prisma, admin, findRoute.projectId);

@@ -10,6 +10,7 @@ export class CreateRole {
   @Matches(ROLE_NAME_PATTERN, {
     message:
       'name must have 2 to 40 characters: an uppercase letter, then uppercase letters, digits or underscores',
+    context: { code: 'role_name_invalid' },
   })
   name: string;
 

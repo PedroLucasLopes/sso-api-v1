@@ -8,10 +8,8 @@ import {
   Param,
   Post,
   Put,
-  UseFilters,
 } from '@nestjs/common';
 import { RedirectUriService } from '../Service/redirectUri.service';
-import { PrismaExceptionValidationFilter } from 'src/global/error/prismaclientvalidationerror.exception';
 import { redirectUri } from 'generated/prisma/client';
 import { CreateRedirectUri } from '../dto/createRedirectUri.dto';
 import { EditRedirectUri } from '../dto/editRedirectUri.dto';
@@ -29,7 +27,6 @@ export class RedirectUriController {
    */
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseFilters(new PrismaExceptionValidationFilter())
   async createRedirectUri(
     @Body() data: CreateRedirectUri,
     @CurrentAdmin() admin: AdminIdentity,

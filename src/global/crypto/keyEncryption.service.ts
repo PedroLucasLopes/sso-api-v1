@@ -1,7 +1,8 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SealedKey } from './dto/sealedKey.dto';
 import { openParts, readKey, sealParts } from './aead';
+import { ApiException } from '../error/apiError';
 
 /**
  * Envelope encryption das chaves privadas de assinatura em repouso.
@@ -13,6 +14,7 @@ import { openParts, readKey, sealParts } from './aead';
 @Injectable()
 export class KeyEncryptionService {
   private readonly kek: Buffer;
+  private readonly logger = new Logger(KeyEncryptionService.name);
 
   constructor(config: ConfigService) {
     this.kek = readKey(
@@ -29,10 +31,12 @@ export class KeyEncryptionService {
     try {
       return openParts(this.kek, sealed);
     } catch {
-      // Auth tag invalido: ou a KEK mudou, ou a linha foi adulterada.
-      throw new InternalServerErrorException(
+      // Auth tag invalido: ou a KEK mudou, ou a linha foi adulterada. O nome da
+      // variavel ajuda quem opera e nao deve chegar a quem chamou a API.
+      this.logger.error(
         'Falha ao decifrar a chave de assinatura. Verifique KEY_ENCRYPTION_KEY.',
       );
+      throw new ApiException('internal_error');
     }
   }
 }

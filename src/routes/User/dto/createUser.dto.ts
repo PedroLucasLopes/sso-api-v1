@@ -5,7 +5,7 @@ export class CreateUser {
   @IsNotEmpty()
   name: string;
 
-  @IsEmail()
+  @IsEmail({}, { context: { code: 'email_invalid' } })
   @IsNotEmpty()
   email: string;
 

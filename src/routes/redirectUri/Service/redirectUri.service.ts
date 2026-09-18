@@ -1,8 +1,4 @@
-import {
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { redirectUri } from 'generated/prisma/client';
 import { PrismaService } from 'src/global/prisma/prisma.service';
 import { SSO_SELF_PROJECT_NAME } from 'src/global/constants/selfProject.constant';
@@ -15,6 +11,7 @@ import {
 } from 'src/global/access/selfProjectProtection';
 import { CreateRedirectUri } from '../dto/createRedirectUri.dto';
 import { EditRedirectUri } from '../dto/editRedirectUri.dto';
+import { ApiException } from 'src/global/error/apiError';
 
 @Injectable()
 export class RedirectUriService {
@@ -33,7 +30,7 @@ export class RedirectUriService {
     });
 
     if (!findProject) {
-      throw new NotFoundException('Project not found');
+      throw new ApiException('project_not_found');
     }
 
     await assertSelfWriter(this.prisma, admin, data.projectId);
@@ -58,7 +55,7 @@ export class RedirectUriService {
     });
 
     if (!findRedirectUri) {
-      throw new NotFoundException('Redirect Uri not found');
+      throw new ApiException('redirect_uri_not_found');
     }
 
     /* Editar troca o endereco sem transicao: se for o do console, ele perde o
@@ -76,7 +73,7 @@ export class RedirectUriService {
       });
 
       if (!findProject) {
-        throw new NotFoundException('Project not found');
+        throw new ApiException('project_not_found');
       }
     }
 
@@ -111,7 +108,7 @@ export class RedirectUriService {
       });
 
       if (!record) {
-        throw new NotFoundException('Redirect Uri not found');
+        throw new ApiException('redirect_uri_not_found');
       }
 
       if (record.project.name === SSO_SELF_PROJECT_NAME) {
@@ -147,7 +144,7 @@ export class RedirectUriService {
       const { count } = await tx.redirectUri.deleteMany({ where: { id } });
 
       if (count === 0) {
-        throw new NotFoundException('Redirect Uri not found');
+        throw new ApiException('redirect_uri_not_found');
       }
     });
   }

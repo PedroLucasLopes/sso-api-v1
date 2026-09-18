@@ -1,39 +1,30 @@
-import {
-  ArgumentsHost,
-  Catch,
-  ExceptionFilter,
-  HttpStatus,
-  Logger,
-} from '@nestjs/common';
+import { ArgumentsHost, Catch, ExceptionFilter, Logger } from '@nestjs/common';
 import { Response } from 'express';
 import { Prisma } from 'generated/prisma/client';
+import { sendApiError } from './apiError';
 
+/**
+ * Erro do banco vira codigo, nunca texto do Prisma. A mensagem dele traz a
+ * consulta, e com ela nomes de tabela, de coluna e ate valores gravados: fica
+ * no log, e so o codigo e o alvo, que nao carregam dado de ninguem.
+ */
 @Catch(Prisma.PrismaClientKnownRequestError)
 export class PrismaExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(PrismaExceptionFilter.name);
 
   catch(exception: Prisma.PrismaClientKnownRequestError, host: ArgumentsHost) {
-    const ctx = host.switchToHttp();
-    const response = ctx.getResponse<Response>();
+    const response = host.switchToHttp().getResponse<Response>();
 
-    switch (exception.code) {
-      case 'P2002': {
-        response.status(HttpStatus.CONFLICT).json({
-          statusCode: HttpStatus.CONFLICT,
-          message: 'Unique Constraint violated',
-        });
-        break;
-      }
-      default: {
-        this.logger.error(
-          'Internal Server Error',
-          HttpStatus.INTERNAL_SERVER_ERROR,
-        );
-        response.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-          statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
-          message: `Internal Server Errror`,
-        });
-      }
+    if (exception.code === 'P2002') {
+      sendApiError(response, 'duplicate');
+      return;
     }
+
+    const target: unknown = exception.meta?.target ?? exception.meta?.modelName;
+
+    this.logger.error(
+      `erro do banco ${exception.code}${target ? ` em ${JSON.stringify(target)}` : ''}`,
+    );
+    sendApiError(response, 'internal_error');
   }
 }

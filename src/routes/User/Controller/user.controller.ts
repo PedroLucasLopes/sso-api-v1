@@ -9,14 +9,12 @@ import {
   Post,
   Put,
   Query,
-  UseFilters,
 } from '@nestjs/common';
 import { UserService } from '../Service/user.service';
 import { User } from 'generated/prisma/client';
 import { FilterUser } from '../dto/filterUser.dto';
 import { CreateUser } from '../dto/createUser.dto';
 import { EditUser } from '../dto/editUser.dto';
-import { PrismaExceptionValidationFilter } from 'src/global/error/prismaclientvalidationerror.exception';
 
 @Controller('user')
 export class UserController {
@@ -36,7 +34,6 @@ export class UserController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseFilters(new PrismaExceptionValidationFilter())
   async createUser(@Body() data: CreateUser): Promise<User> {
     return await this.userService.createUser(data);
   }

@@ -72,6 +72,26 @@ credenciais de operador do SSO alvo, que a aplicação recebe no **próprio** `.
 Nada além disso. A aplicação nova tem o próprio `docker-compose.yml`, não compartilha banco e não
 precisa que o `krloc-api-v1` exista.
 
+### Erro sai com código
+
+Toda API do ecossistema responde erro com um código estável no campo `error`, e o front escolhe o
+texto por ele, na língua da tela:
+
+```json
+{ "statusCode": 404, "error": "equipment_not_found", "message": "Equipment not found" }
+```
+
+- **O `message` nunca vai para a tela.** Ele é para quem lê a resposta crua, como o `detail` da
+  RFC 9457 §3.1.4, que desaconselha o consumidor de interpretá-lo. Mostrado, ele seria o caminho de um
+  detalhe interno ou de um valor repetido da requisição até a pessoa.
+- **Valor que a tela precisa vai num membro próprio do corpo** (RFC 9457 §3.2), nunca dentro do texto.
+- **Código desconhecido cai na mensagem do status.** Código novo na API é acréscimo; renomear um quebra
+  o front que o traduz.
+- **O `sso-client` segue o mesmo contrato**, e o OAuth, o da RFC 6749 §5.2.
+
+O `krloc-api-v1` e o `plataforma_krloc-v1` são o modelo: catálogo em `src/global/error/apiError.ts`, e
+tradução em `src/constants/messages.ts` e `errors.code.*` dos JSON.
+
 ---
 
 ## 📦 Pacotes compartilhados
@@ -338,9 +358,17 @@ RFCs: 6749 (core), 7009 (revogação), 7523 (client assertion), 7636 (PKCE), 766
     cada 30 segundos, e na volta à aba, e o menu muda sem recarregar a página. De quebra, o logout deixou
     de ser cosmético para o access token já emitido, e dois caminhos em que a própria biblioteca
     renovava duas vezes com o mesmo refresh token, derrubando a sessão por reuso, foram fechados.
+27. **Erro sai com código; o texto é do front.** Os fronts reconheciam o erro pela frase do servidor e
+    mostravam crua a que não conheciam. Agora toda API responde o erro com um código estável no campo
+    `error`, de um catálogo em `global/error/apiError.ts` de cada uma. A recusa da validação traz o código
+    de cada campo, e o `sso-client` 0.5.0 manda `csrf_token_invalid`, `origin_not_allowed` e
+    `invalid_token`. O front escolhe o texto pelo código, na língua da tela, e nunca mostra `message`.
+    Junto saíram do corpo o texto interno do Prisma, o motivo exato de token recusado e valores
+    repetidos da requisição (RFC 9457 §3.1.4 e §5).
 
-Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 166 asserções, e `npx jest` para
-as regras de proteção) e `test/sso-e2e.js` do `krloc-api-v1` (`npm run test:sso`, 91 asserções). As
+Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 174 asserções, e `npx jest` para
+as regras de proteção e os filtros de erro) e `test/sso-e2e.js` do `krloc-api-v1` (`npm run test:sso`,
+94 asserções, e `npx jest` para o contrato de erro). As
 duas suítes ponta a ponta rodam contra a stack de pé, criam o que precisam e desfazem tudo no fim,
 inclusive quando quebram no meio.
 

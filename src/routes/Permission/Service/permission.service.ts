@@ -1,13 +1,10 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Permission } from 'generated/prisma/client';
 import { PrismaService } from 'src/global/prisma/prisma.service';
 import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
 import { assertSelfWriter } from 'src/global/access/selfProjectProtection';
 import { CreatePermission } from '../dto/createPermission.dto';
+import { ApiException } from 'src/global/error/apiError';
 
 @Injectable()
 export class PermissionService {
@@ -25,17 +22,15 @@ export class PermissionService {
     ]);
 
     if (!role) {
-      throw new NotFoundException('Role not found');
+      throw new ApiException('role_not_found');
     }
 
     if (!route) {
-      throw new NotFoundException('Route not found');
+      throw new ApiException('route_not_found');
     }
 
     if (role.projectId !== route.projectId) {
-      throw new BadRequestException(
-        'You cannot associate roles from different projects',
-      );
+      throw new ApiException('role_route_project_mismatch');
     }
 
     await assertSelfWriter(this.prisma, admin, role.projectId);
@@ -58,7 +53,7 @@ export class PermissionService {
     });
 
     if (!permission) {
-      throw new NotFoundException('Permission not found');
+      throw new ApiException('permission_not_found');
     }
 
     await assertSelfWriter(this.prisma, admin, permission.role.projectId);

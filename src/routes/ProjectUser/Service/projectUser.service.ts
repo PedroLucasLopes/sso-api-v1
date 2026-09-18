@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'src/global/prisma/prisma.service';
 import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
 import {
@@ -12,6 +8,7 @@ import {
 import { CreateProjectUser } from '../dto/createProjectUser.dto';
 import { EditProjectUser } from '../dto/editProjectUser.dto';
 import { ProjectUser } from 'generated/prisma/client';
+import { ApiException } from 'src/global/error/apiError';
 
 /**
  * Quem tem acesso a cada projeto, e com qual papel. Um papel por pessoa por
@@ -40,21 +37,19 @@ export class ProjectUserService {
     ]);
 
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw new ApiException('user_not_found');
     }
 
     if (!project) {
-      throw new NotFoundException('Project not found');
+      throw new ApiException('project_not_found');
     }
 
     if (!role) {
-      throw new NotFoundException('Role not found');
+      throw new ApiException('role_not_found');
     }
 
     if (project.id !== role.projectId) {
-      throw new BadRequestException(
-        `${role.name} role does not exist in ${project.name} project`,
-      );
+      throw new ApiException('role_not_in_project');
     }
 
     await assertSelfWriter(this.prisma, admin, projectId);
@@ -82,7 +77,7 @@ export class ProjectUserService {
     });
 
     if (!membership) {
-      throw new NotFoundException('Project user not found');
+      throw new ApiException('member_not_found');
     }
 
     const role = await this.prisma.role.findUnique({
@@ -90,13 +85,11 @@ export class ProjectUserService {
     });
 
     if (!role) {
-      throw new NotFoundException('Role not found');
+      throw new ApiException('role_not_found');
     }
 
     if (role.projectId !== projectId) {
-      throw new BadRequestException(
-        `${role.name} role does not exist in this project`,
-      );
+      throw new ApiException('role_not_in_project');
     }
 
     await assertSelfWriter(this.prisma, admin, projectId);
@@ -127,7 +120,7 @@ export class ProjectUserService {
     });
 
     if (!membership) {
-      throw new NotFoundException('Project user not found');
+      throw new ApiException('member_not_found');
     }
 
     await assertSelfWriter(this.prisma, admin, projectId);

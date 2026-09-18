@@ -9,10 +9,8 @@ import {
   Param,
   Post,
   Query,
-  UseFilters,
 } from '@nestjs/common';
 import { ClientKey } from 'generated/prisma/client';
-import { PrismaExceptionValidationFilter } from 'src/global/error/prismaclientvalidationerror.exception';
 import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
 import { CurrentAdmin } from 'src/global/decorator/currentAdmin.decorator';
 import { ClientKeyService } from '../Service/clientKey.service';
@@ -37,7 +35,6 @@ export class ClientKeyController {
   /** Cadastra uma chave publica que o dono da aplicacao gerou na propria maquina. */
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseFilters(new PrismaExceptionValidationFilter())
   async create(
     @Body() data: CreateClientKey,
     @CurrentAdmin() admin: AdminIdentity,

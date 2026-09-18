@@ -9,13 +9,11 @@ import {
   Post,
   Put,
   Query,
-  UseFilters,
 } from '@nestjs/common';
 import { RouteService } from '../Service/route.service';
 import { FilterRoute } from '../dto/filterRoute.dto';
 import { Route } from 'generated/prisma/client';
 import { CreateRoute } from '../dto/createRoute.dto';
-import { PrismaExceptionValidationFilter } from 'src/global/error/prismaclientvalidationerror.exception';
 import { EditRoute } from '../dto/editRoute.dto';
 import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
 import { CurrentAdmin } from 'src/global/decorator/currentAdmin.decorator';
@@ -38,7 +36,6 @@ export class RouteController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseFilters(new PrismaExceptionValidationFilter())
   async createRoute(
     @Body() data: CreateRoute,
     @CurrentAdmin() admin: AdminIdentity,

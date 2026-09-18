@@ -4,6 +4,8 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import { PrismaExceptionFilter } from './global/error/prismaclientknownerror.exception';
+import { PrismaExceptionValidationFilter } from './global/error/prismaclientvalidationerror.exception';
+import { validationException } from './global/error/validationError';
 import cookieParser from 'cookie-parser';
 import { SSO_ROUTE_PREFIX } from './global/constants/routePrefix.constant';
 
@@ -52,13 +54,20 @@ async function bootstrap() {
   }
 
   app.setGlobalPrefix(SSO_ROUTE_PREFIX);
-  app.useGlobalFilters(new PrismaExceptionFilter());
+  // Erro do Prisma vira codigo; o texto dele, que traz a consulta, fica no log.
+  app.useGlobalFilters(
+    new PrismaExceptionFilter(),
+    new PrismaExceptionValidationFilter(),
+  );
   app.use(cookieParser());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
+      // A recusa sai com codigo por campo, no contrato de erro da API. No OAuth,
+      // OAuthValidationFilter a reescreve no formato da RFC 6749.
+      exceptionFactory: validationException,
     }),
   );
   await app.listen(process.env.PORT ?? 8080);

@@ -9,7 +9,10 @@ export class IdentityProviderException extends Error {
   constructor(
     readonly code: Extract<
       LoginErrorCode,
-      'account_not_registered' | 'email_not_verified' | 'account_mismatch' | 'provider_error'
+      | 'account_not_registered'
+      | 'email_not_verified'
+      | 'account_mismatch'
+      | 'provider_error'
     >,
     message: string,
   ) {

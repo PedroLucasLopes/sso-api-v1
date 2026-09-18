@@ -29,7 +29,9 @@ export class GoogleAuthGuard extends AuthGuard('google') {
 
     if (!this.pendingTransaction(req)) {
       throw new LoginPageRedirectException(
-        req.path.endsWith('/callback') ? 'request_expired' : 'no_pending_request',
+        req.path.endsWith('/callback')
+          ? 'request_expired'
+          : 'no_pending_request',
       );
     }
 

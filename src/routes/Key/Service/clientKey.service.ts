@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import * as crypto from 'node:crypto';
 import { ClientKey } from 'generated/prisma/client';
 import { PrismaService } from 'src/global/prisma/prisma.service';
@@ -10,6 +6,7 @@ import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
 import { assertSelfWriter } from 'src/global/access/selfProjectProtection';
 import { CreateClientKey } from '../dto/createClientKey.dto';
 import { GeneratedClientKey } from '../dto/generatedClientKey.dto';
+import { ApiException } from 'src/global/error/apiError';
 
 /**
  * Cadastro das chaves publicas que cada aplicacao cliente usa para se
@@ -33,7 +30,7 @@ export class ClientKeyService {
     });
 
     if (!keys.length) {
-      throw new NotFoundException('Nenhuma chave cadastrada para este projeto');
+      throw new ApiException('client_keys_empty');
     }
 
     return keys;
@@ -48,7 +45,7 @@ export class ClientKeyService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project not found');
+      throw new ApiException('project_not_found');
     }
 
     await assertSelfWriter(this.prisma, admin, data.projectId);
@@ -60,19 +57,17 @@ export class ClientKeyService {
     try {
       publicKey = crypto.createPublicKey(data.publicKeyPem);
     } catch {
-      throw new BadRequestException('publicKeyPem nao e uma chave valida');
+      throw new ApiException('public_key_invalid');
     }
 
     if (publicKey.asymmetricKeyType !== 'rsa') {
-      throw new BadRequestException('apenas chaves RSA sao aceitas (RS256)');
+      throw new ApiException('public_key_not_rsa');
     }
 
     const modulusBits = publicKey.asymmetricKeyDetails?.modulusLength ?? 0;
 
     if (modulusBits < 2048) {
-      throw new BadRequestException(
-        'a chave RSA precisa ter ao menos 2048 bits',
-      );
+      throw new ApiException('public_key_too_short');
     }
 
     return this.prisma.clientKey.create({
@@ -103,7 +98,7 @@ export class ClientKeyService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project not found');
+      throw new ApiException('project_not_found');
     }
 
     await assertSelfWriter(this.prisma, admin, projectId);
@@ -142,7 +137,7 @@ export class ClientKeyService {
     });
 
     if (!key || key.revokedAt) {
-      throw new NotFoundException('Chave nao encontrada ou ja revogada');
+      throw new ApiException('client_key_not_found');
     }
 
     await assertSelfWriter(this.prisma, admin, key.projectId);
@@ -153,7 +148,7 @@ export class ClientKeyService {
     });
 
     if (count === 0) {
-      throw new NotFoundException('Chave nao encontrada ou ja revogada');
+      throw new ApiException('client_key_not_found');
     }
   }
 }

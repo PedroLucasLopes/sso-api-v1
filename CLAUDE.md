@@ -50,17 +50,18 @@ Em container, `docker compose up -d --build` na raiz deste repositório, com a c
 `.env.docker`. O compose sobe só o SSO e as migrations. Cada aplicação sobe o próprio compose, no
 próprio repositório, e chega a este serviço pela porta da máquina, `host.docker.internal:8080`.
 
-`npm run test:oauth` sobe 166 asserções contra o servidor rodando: ordem dos erros do authorize,
+`npm run test:oauth` sobe 174 asserções contra o servidor rodando: ordem dos erros do authorize,
 formato dos erros do token endpoint, PKCE, autenticação de cliente, verificação do access token
 contra o JWKS, uso único do code, rotação de refresh token, revogação pelos dois tipos de token, a
 autorização administrativa vinda do banco, a raiz e o 404 de rota negada, papéis de nome livre, troca
 e remoção de membro, a tela de login do IdP, o login do console e a escrita pela sessão com CSRF, a
-exclusão de redirect URI, a proteção do projeto SSO, a exclusão de conta sem projeto e a
-introspecção. **Rode depois de qualquer mudança em
+exclusão de redirect URI, a proteção do projeto SSO, a exclusão de conta sem projeto, a
+introspecção e o contrato de erro por código. **Rode depois de qualquer mudança em
 `routes/auth/` ou em `global/access/`.**
 
 `npx jest` roda os testes de unidade. Hoje cobrem a proteção do projeto SSO, inclusive a regra do
-último SUPERADMIN, que a suíte ponta a ponta não alcança sem rebaixar a raiz real do ambiente.
+último SUPERADMIN, que a suíte ponta a ponta não alcança sem rebaixar a raiz real do ambiente, e os
+filtros do Prisma, que não podem deixar o texto dele chegar ao corpo da resposta.
 
 A suíte ponta a ponta **só roda contra banco local** e recusa outro endereço antes de gravar qualquer
 coisa: ela cria operadores com papel no próprio SSO, papéis e rotas, e desfaz tudo no fim, inclusive
@@ -78,7 +79,7 @@ quando quebra no meio. Precisa do SQL de primeira subida aplicado e de mais nenh
 │  ├─ cookie/        # CookieService: cookies cifrados (AES-256-GCM)
 │  ├─ crypto/        # aead.ts (primitiva) + KeyEncryptionService
 │  ├─ decorator/     # @Public() @Authenticated() @CurrentAdmin()
-│  ├─ error/         # ExceptionFilters do Prisma
+│  ├─ error/         # contrato de erro (apiError.ts), recusa da validação e filtros do Prisma
 │  ├─ guards/        # SSOAdminGuard (APP_GUARD), GoogleAuthGuard
 │  ├─ pagination/
 │  └─ prisma/
@@ -462,11 +463,42 @@ de sessão usado para consultar o banco. As duas são anteriores ao banco por co
 - **Controller** só orquestra. Regra de negócio no service.
 - **DTOs**: `create<X>.dto.ts` · `edit<X>.dto.ts` = `PartialType(Create<X>)` · `filter<X>.dto.ts` estende `Pagination`.
 - **Paginação**: `PaginationConfig(filter)` → `{ page, limit }` como `skip`/`take`.
-- `findAll` lança `NotFoundException` com lista vazia (padrão do projeto, replicado no `krloc`).
-- Erros do Prisma: `PrismaExceptionFilter` global (P2002 → 409) + `PrismaExceptionValidationFilter` por rota.
+- `findAll` lança `ApiException('no_results')` com lista vazia (padrão do projeto, replicado no `krloc`).
+- **Erro é código do catálogo**, `throw new ApiException('<codigo>')`. Ver "Contrato de erro", abaixo.
+- Erros do Prisma: `PrismaExceptionFilter` e `PrismaExceptionValidationFilter`, os dois globais, em `main.ts`.
 - Erros de OAuth: `OAuthException` e `AuthorizeRedirectException`, renderizados pelos filtros em
   `routes/auth/error/`. **Nunca** devolva o formato padrão do Nest nos endpoints OAuth.
 - Tipos de `generated/prisma/client`; enums de `generated/prisma/enums`.
+
+### 🚫 Contrato de erro
+
+A API administrativa responde todo erro com o código no campo `error`:
+
+```json
+{ "statusCode": 404, "error": "project_not_found", "message": "projeto nao encontrado" }
+```
+
+- **O código é o contrato; o texto é do console.** O `plataforma_sso-v1` escolhe a frase pelo código, na
+  língua da tela, e **nunca mostra `message`**. Ele é para quem lê a resposta crua, como o `detail` da
+  RFC 9457 §3.1.4, e não leva valor da requisição nem detalhe interno.
+- **O catálogo é `global/error/apiError.ts`**. As recusas que já tinham código continuam onde estão, no
+  mesmo formato: a proteção do projeto `SSO` (`selfProjectProtection.ts`), as da redirect URI do
+  console, as do anti-CSRF e da origem e o `no_pending_request`. Código novo entra no catálogo e no
+  `constants/messages.ts` e nos JSON de tradução do console.
+- **Validação de DTO** sai `validation_failed`, com `fields: [{ field, error, message }]`. O código do
+  campo vem do `context` da regra: `role_name_invalid`, `public_key_not_pem`, `email_invalid`. Regra sem
+  código sai `invalid_value`.
+- **No OAuth o formato continua o da RFC 6749 §5.2.** O `OAuthValidationFilter` reescreve a recusa da
+  validação como `invalid_request`, ou `unsupported_grant_type` quando só o `grant_type` falhou, com
+  descrição fixa e `Cache-Control: no-store`.
+- **Token recusado no guard administrativo** sai `invalid_token` (RFC 6750 §3.1), sem dizer qual
+  conferência falhou: o motivo vai para o log. Dizer "kid desconhecido" ou "assinatura inválida" a quem
+  mandou só ajuda a montar o próximo token forjado.
+- **Erro do Prisma e falha interna** viram `duplicate`, `validation_failed` ou `internal_error`, e o
+  texto fica no log: a mensagem do Prisma traz a consulta, e a da chave de assinatura nomeia a variável
+  de ambiente.
+- **O 404 de rota negada fica como o do roteador**, sem código, para continuar igual ao de caminho que
+  não existe.
 
 ### ⚠️ Armadilha do `$transaction`
 
@@ -501,6 +533,11 @@ por teste em `test/oauth-e2e.js`.
 
 ### ✅ Já corrigidos
 
+- **O console reconhecia o erro pela frase**, e o texto desconhecido aparecia cru na tela. Agora todo
+  erro sai com código (ver "Contrato de erro"). Junto saíram do corpo o texto interno do Prisma, o nome
+  da variável da chave de assinatura, o motivo exato da recusa do Bearer e a origem repetida na recusa
+  de escrita. Ver `PENTEST.md`, SSO-12. A recusa de validação no token endpoint, que saía no formato do
+  Nest, passou ao da RFC 6749 §5.2.
 - Assinatura migrada de HS256 com segredo compartilhado para **RS256 com JWKS**.
 - Autenticação de cliente por **`private_key_jwt`** (RFC 7523 §2.2).
 - **Redis removido.** Transação e sessão em cookie cifrado; code e refresh token no Postgres.
@@ -593,6 +630,8 @@ por teste em `test/oauth-e2e.js`.
 - Rota administrativa nova **não** ganha decorator de nível: ela entra no catálogo do projeto `SSO`,
   pelo console, e ganha `Permission`. Quem decide acesso é o banco; o código só conhece a raiz.
 - Rota negada responde 404, igual a caminho que não existe. Não volte a responder 403 ali.
+- Erro sai com código do catálogo `global/error/apiError.ts`, ou do formato da RFC 6749 no OAuth. `message`
+  não leva valor da requisição nem detalhe interno, e token recusado não diz por quê.
 - Nada de bootstrap, seed ou manifesto com catálogo, papel ou administrador no repositório. Ambiente
   novo nasce do SQL de primeira subida, que fica fora dele.
 - Nenhum segredo de administração volta para o ambiente.

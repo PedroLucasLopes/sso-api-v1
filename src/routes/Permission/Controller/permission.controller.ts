@@ -6,12 +6,10 @@ import {
   HttpStatus,
   Param,
   Post,
-  UseFilters,
 } from '@nestjs/common';
 import { PermissionService } from '../Service/permission.service';
 import { CreatePermission } from '../dto/createPermission.dto';
 import { Permission } from 'generated/prisma/client';
-import { PrismaExceptionValidationFilter } from 'src/global/error/prismaclientvalidationerror.exception';
 import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
 import { CurrentAdmin } from 'src/global/decorator/currentAdmin.decorator';
 
@@ -21,7 +19,6 @@ export class PermissionController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseFilters(new PrismaExceptionValidationFilter())
   async createPermission(
     @Body() data: CreatePermission,
     @CurrentAdmin() admin: AdminIdentity,

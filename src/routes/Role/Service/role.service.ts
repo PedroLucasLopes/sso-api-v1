@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Role } from 'generated/prisma/client';
 import { PaginationConfig } from 'src/global/pagination/pagination';
 import { PrismaService } from 'src/global/prisma/prisma.service';
@@ -10,6 +10,7 @@ import {
 import { EditRole } from '../dto/editRole.dto';
 import { CreateRole } from '../dto/createRole.dto';
 import { FilterRole } from '../dto/filterRole.dto';
+import { ApiException } from 'src/global/error/apiError';
 
 @Injectable()
 export class RoleService {
@@ -38,7 +39,7 @@ export class RoleService {
     });
 
     if (!roles.length) {
-      throw new NotFoundException('No roles found');
+      throw new ApiException('no_results');
     }
 
     return roles;
@@ -57,7 +58,7 @@ export class RoleService {
     });
 
     if (!role) {
-      throw new NotFoundException('Role not found');
+      throw new ApiException('role_not_found');
     }
 
     return role;
@@ -70,7 +71,7 @@ export class RoleService {
     });
 
     if (!findProject) {
-      throw new NotFoundException('Project Not Found');
+      throw new ApiException('project_not_found');
     }
 
     await assertSelfWriter(this.prisma, admin, data.projectId);
@@ -88,7 +89,7 @@ export class RoleService {
     const findRole = await this.prisma.role.findUnique({ where: { id } });
 
     if (!findRole) {
-      throw new NotFoundException('Role not Found');
+      throw new ApiException('role_not_found');
     }
 
     await assertSelfWriter(
@@ -115,7 +116,7 @@ export class RoleService {
     const findRole = await this.prisma.role.findUnique({ where: { id } });
 
     if (!findRole) {
-      throw new NotFoundException('Role not found');
+      throw new ApiException('role_not_found');
     }
 
     await assertSelfWriter(this.prisma, admin, findRole.projectId);

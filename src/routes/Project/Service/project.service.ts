@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Project } from 'generated/prisma/client';
 import { ProjectStatus } from 'generated/prisma/enums';
 import { ProjectOverview } from '../dto/projectOverview.dto';
@@ -15,6 +11,7 @@ import { CreateProject } from '../dto/createProject.dto';
 import { FilterProject } from '../dto/filterProject.dto';
 import { EditProject } from '../dto/editProject.dto';
 import * as crypto from 'node:crypto';
+import { ApiException } from 'src/global/error/apiError';
 
 @Injectable()
 export class ProjectService {
@@ -39,7 +36,7 @@ export class ProjectService {
     });
 
     if (!projects.length) {
-      throw new NotFoundException('No Projects Found');
+      throw new ApiException('no_results');
     }
 
     return projects;
@@ -49,7 +46,7 @@ export class ProjectService {
     const project = await this.prisma.project.findUnique({ where: { id } });
 
     if (!project) {
-      throw new NotFoundException('Project not found');
+      throw new ApiException('project_not_found');
     }
 
     return project;
@@ -78,7 +75,7 @@ export class ProjectService {
     const project = await this.prisma.project.findUnique({ where: { id } });
 
     if (!project) {
-      throw new NotFoundException('Project Not Found');
+      throw new ApiException('project_not_found');
     }
 
     // O SSO acha o próprio projeto pelo nome. Renomear tira a administracao do ar.
@@ -108,7 +105,7 @@ export class ProjectService {
     const project = await this.prisma.project.findUnique({ where: { id } });
 
     if (!project) {
-      throw new NotFoundException('Project not found');
+      throw new ApiException('project_not_found');
     }
 
     // Fora de ACTIVE o SSO nao emite token nem para quem o administra.
@@ -129,9 +126,7 @@ export class ProjectService {
       // Ativar sem chave deixaria a aplicacao passar no authorize e falhar
       // so na troca do token, com erro confuso.
       if (keys === 0) {
-        throw new BadRequestException(
-          'cadastre ao menos uma chave publica em /clientkey antes de ativar',
-        );
+        throw new ApiException('client_key_required');
       }
     }
 
@@ -166,7 +161,7 @@ export class ProjectService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project not found');
+      throw new ApiException('project_not_found');
     }
 
     return {
@@ -229,7 +224,7 @@ export class ProjectService {
     });
 
     if (!project) {
-      throw new NotFoundException('Project not found');
+      throw new ApiException('project_not_found');
     }
 
     if (project.name === SSO_SELF_PROJECT_NAME) {
@@ -239,13 +234,11 @@ export class ProjectService {
     }
 
     if (project.projectUsers.length > 0) {
-      throw new BadRequestException('This project have ongoing permissions');
+      throw new ApiException('project_has_members');
     }
 
     if (project.routes.length > 0) {
-      throw new BadRequestException(
-        'Some routes are associated with this project',
-      );
+      throw new ApiException('project_has_routes');
     }
 
     await this.prisma.$transaction([

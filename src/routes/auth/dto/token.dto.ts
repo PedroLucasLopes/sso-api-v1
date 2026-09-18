@@ -18,7 +18,9 @@ export const CLIENT_ASSERTION_TYPE =
  */
 export class Token {
   @IsString()
-  @IsIn(['authorization_code', 'refresh_token'])
+  @IsIn(['authorization_code', 'refresh_token'], {
+    context: { code: 'unsupported_grant_type' },
+  })
   grant_type: 'authorization_code' | 'refresh_token';
 
   // ---- grant_type=authorization_code ----

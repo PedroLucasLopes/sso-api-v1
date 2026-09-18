@@ -28,6 +28,7 @@ import { LoginPageRedirectFilter } from '../error/loginPage.filter';
 import {
   AuthorizeRedirectExceptionFilter,
   OAuthExceptionFilter,
+  OAuthValidationFilter,
 } from '../error/oauth.filter';
 
 @Controller('oauth')
@@ -36,6 +37,7 @@ import {
   OAuthExceptionFilter,
   AuthorizeRedirectExceptionFilter,
   LoginPageRedirectFilter,
+  OAuthValidationFilter,
 )
 export class AuthController {
   constructor(private authService: AuthService) {}

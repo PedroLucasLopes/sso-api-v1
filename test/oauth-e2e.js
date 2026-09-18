@@ -230,6 +230,33 @@ const verifyWithJwks = async (token) => {
   const weakRes = await api('POST', '/clientkey', { projectId, publicKeyPem: weak.publicKey });
   check('POST /clientkey recusa chave de 1024 bits', weakRes.status === 400, `HTTP ${weakRes.status}`);
 
+  console.log('\n=== erro sai com codigo; o texto do servidor nao e o contrato ===');
+
+  /* O console escolhe o texto pelo codigo, na lingua da tela, e nunca mostra o
+   * `message`. Estas asserções prendem o contrato: codigo estavel em `error`, e
+   * nada vindo da requisicao nem de dentro do servidor no corpo. */
+  check('recusa de negocio vem com codigo', weakRes.json?.error === 'public_key_too_short',
+    String(weakRes.json?.error));
+
+  const projetoInexistente = await api('GET', `/project/${crypto.randomUUID()}`);
+  check('registro que nao existe vem com codigo e status no corpo',
+    projetoInexistente.status === 404 && projetoInexistente.json?.error === 'project_not_found'
+      && projetoInexistente.json?.statusCode === 404,
+    `HTTP ${projetoInexistente.status} ${projetoInexistente.json?.error}`);
+
+  const nomeRuim = `papel ${tag} <b>`;
+  const papelRuim = await api('POST', '/role', { name: nomeRuim, projectId });
+  check('validacao do DTO vem como validation_failed, com o codigo do campo',
+    papelRuim.status === 400 && papelRuim.json?.error === 'validation_failed'
+      && papelRuim.json?.fields?.some((f) => f.field === 'name' && f.error === 'role_name_invalid'),
+    JSON.stringify(papelRuim.json?.fields?.map((f) => `${f.field}:${f.error}`)));
+  check('a recusa da validacao nao repete o valor enviado', !papelRuim.text.includes(nomeRuim));
+
+  const emailRuim = await api('POST', '/user', { name: 'Sem email', email: 'nao-e-email' });
+  check('campo sem regra propria vem com o codigo dele',
+    emailRuim.status === 400 && emailRuim.json?.fields?.some((f) => f.field === 'email' && f.error === 'email_invalid'),
+    JSON.stringify(emailRuim.json?.fields?.map((f) => `${f.field}:${f.error}`)));
+
   console.log('\n=== o projeto nasce PENDING e nao pode usar o SSO ===');
   check('projeto criado vem com status PENDING', project.json?.status === 'PENDING', String(project.json?.status));
 
@@ -366,6 +393,20 @@ const verifyWithJwks = async (token) => {
   check('code_verifier errado devolve invalid_grant (PKCE)',
     wrongVerifier.status === 400 && wrongVerifier.json?.error === 'invalid_grant',
     `${wrongVerifier.json?.error}: ${wrongVerifier.json?.error_description}`);
+
+  /* O corpo e recusado pelo ValidationPipe antes do service. No token endpoint a
+   * resposta continua a da RFC 6749 secao 5.2, e nao o contrato da API. */
+  const grantDesconhecido = await tokenReq({ grant_type: 'password', username: 'x', password: 'y' });
+  check('grant_type desconhecido devolve unsupported_grant_type (RFC 6749 secao 5.2)',
+    grantDesconhecido.status === 400 && grantDesconhecido.json?.error === 'unsupported_grant_type'
+      && grantDesconhecido.cacheControl === 'no-store',
+    `HTTP ${grantDesconhecido.status} ${grantDesconhecido.json?.error}`);
+
+  const semGrant = await tokenReq({ code, redirect_uri: REDIRECT });
+  check('corpo sem grant_type devolve invalid_request',
+    semGrant.status === 400 && semGrant.json?.error === 'invalid_request'
+      && typeof semGrant.json?.error_description === 'string',
+    `HTTP ${semGrant.status} ${semGrant.json?.error}`);
 
   // O code foi consumido pela tentativa acima, entao pega um novo.
   const fresh = await api('GET', authorizeQs(), null, { cookie: sessionCookie });
@@ -1319,6 +1360,9 @@ const verifyWithJwks = async (token) => {
   check('token certo vindo de outra origem continua recusado',
     escritaDeOutraOrigem.status === 403 && escritaDeOutraOrigem.json?.error === 'origin_not_allowed',
     `HTTP ${escritaDeOutraOrigem.status}`);
+  check('a recusa de origem nao repete a origem recebida',
+    !JSON.stringify(escritaDeOutraOrigem.json).includes('evil.example'),
+    String(escritaDeOutraOrigem.json?.message));
 
   const escritaValida = await bruto('POST', '/user',
     { cookie: cookieDoOperador, 'x-csrf-token': CSRF, origin: origemDoConsole }, novoUsuario);

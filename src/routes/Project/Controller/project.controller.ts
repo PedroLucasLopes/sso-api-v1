@@ -10,9 +10,7 @@ import {
   Post,
   Put,
   Query,
-  UseFilters,
 } from '@nestjs/common';
-import { PrismaExceptionValidationFilter } from 'src/global/error/prismaclientvalidationerror.exception';
 import { ProjectService } from '../Service/project.service';
 import { FilterProject } from '../dto/filterProject.dto';
 import { Project } from 'generated/prisma/client';
@@ -61,7 +59,6 @@ export class ProjectController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseFilters(new PrismaExceptionValidationFilter())
   async createProject(@Body() data: CreateProject): Promise<Project> {
     return await this.projectService.createProject(data);
   }

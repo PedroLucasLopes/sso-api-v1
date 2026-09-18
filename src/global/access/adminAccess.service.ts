@@ -4,7 +4,6 @@ import {
   Logger,
   NotFoundException,
   OnApplicationBootstrap,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
@@ -24,6 +23,7 @@ import {
 import { SSO_ROUTE_PREFIX } from '../constants/routePrefix.constant';
 import { AdminIdentity } from './adminIdentity.dto';
 import { AdminRoutesService } from './adminRoutes.service';
+import { ApiException } from '../error/apiError';
 
 interface SelfProject {
   id: string;
@@ -188,9 +188,7 @@ export class AdminAccessService implements OnApplicationBootstrap {
         throw this.notFound(request);
       }
 
-      throw new ForbiddenException(
-        'usuario sem vinculo com o projeto administrativo do SSO',
-      );
+      throw new ApiException('sso_access_denied');
     }
 
     return {
@@ -251,7 +249,7 @@ export class AdminAccessService implements OnApplicationBootstrap {
 
       throw new ForbiddenException({
         error: 'origin_not_allowed',
-        message: `a origem ${origin} nao pertence ao console do SSO`,
+        message: 'a origem do pedido nao pertence ao console do SSO',
       });
     }
   }
@@ -377,7 +375,7 @@ export class AdminAccessService implements OnApplicationBootstrap {
     );
 
     if (!cookie?.authSessionId) {
-      throw new UnauthorizedException('credencial ausente');
+      throw new ApiException('login_required');
     }
 
     const session = await this.prisma.authSession.findUnique({
@@ -389,7 +387,7 @@ export class AdminAccessService implements OnApplicationBootstrap {
       session.revokedAt ||
       session.expiresAt.getTime() <= Date.now()
     ) {
-      throw new UnauthorizedException('sessao expirada ou encerrada');
+      throw new ApiException('login_required');
     }
 
     let csrfToken = cookie.csrf;
@@ -424,18 +422,29 @@ export class AdminAccessService implements OnApplicationBootstrap {
     };
   }
 
+  /**
+   * Token recusado sai com um codigo so, `invalid_token` (RFC 6750 secao 3.1).
+   * O motivo exato fica no log: a quem mandou, dizer qual conferencia falhou
+   * so ajuda a montar o proximo token forjado.
+   */
+  private invalidToken(motivo: string): ApiException {
+    this.logger.warn(`access token recusado: ${motivo}`);
+
+    return new ApiException('invalid_token');
+  }
+
   private async verifyBearer(request: Request): Promise<AccessTokenClaims> {
     const header = request.headers.authorization;
 
     if (!header?.startsWith('Bearer ')) {
-      throw new UnauthorizedException('credencial ausente');
+      throw new ApiException('login_required');
     }
 
     const token = header.slice('Bearer '.length).trim();
     const parts = token.split('.');
 
     if (parts.length !== 3) {
-      throw new UnauthorizedException('access token malformado');
+      throw this.invalidToken('access token malformado');
     }
 
     const [encodedHeader, encodedPayload, encodedSignature] = parts;
@@ -446,7 +455,7 @@ export class AdminAccessService implements OnApplicationBootstrap {
     // `alg` fixo no que o AS emite. Aceitar o que vem escrito no token e como
     // se abre a confusao de algoritmo, inclusive `none`.
     if (!jwtHeader || jwtHeader.alg !== 'RS256' || !jwtHeader.kid) {
-      throw new UnauthorizedException('cabecalho do token invalido');
+      throw this.invalidToken('cabecalho do token invalido');
     }
 
     const signingKey = await this.prisma.signingKey.findUnique({
@@ -454,7 +463,7 @@ export class AdminAccessService implements OnApplicationBootstrap {
     });
 
     if (!signingKey) {
-      throw new UnauthorizedException('kid desconhecido');
+      throw this.invalidToken('kid desconhecido');
     }
 
     const verified = crypto.verify(
@@ -465,27 +474,27 @@ export class AdminAccessService implements OnApplicationBootstrap {
     );
 
     if (!verified) {
-      throw new UnauthorizedException('assinatura do token invalida');
+      throw this.invalidToken('assinatura do token invalida');
     }
 
     const claims = this.decode<AccessTokenClaims>(encodedPayload);
 
     if (!claims?.sub || !claims.jti) {
-      throw new UnauthorizedException('token sem sub ou jti');
+      throw this.invalidToken('token sem sub ou jti');
     }
 
     if (claims.iss !== this.issuer) {
-      throw new UnauthorizedException('emissor do token nao e este SSO');
+      throw this.invalidToken('emissor do token nao e este SSO');
     }
 
     const now = Math.floor(Date.now() / 1000);
 
     if (typeof claims.exp !== 'number' || claims.exp <= now) {
-      throw new UnauthorizedException('access token expirado');
+      throw this.invalidToken('access token expirado');
     }
 
     if (typeof claims.nbf === 'number' && claims.nbf > now) {
-      throw new UnauthorizedException('access token ainda nao vale');
+      throw this.invalidToken('access token ainda nao vale');
     }
 
     const project = await this.resolveSelfProject();
@@ -496,9 +505,7 @@ export class AdminAccessService implements OnApplicationBootstrap {
     // Sem esta conferencia o token que o krloc recebe abriria a administracao
     // do SSO: mesma assinatura, mesmo emissor, outro publico.
     if (!audiences.includes(project.clientId)) {
-      throw new UnauthorizedException(
-        'este token foi emitido para outra aplicacao',
-      );
+      throw this.invalidToken('este token foi emitido para outra aplicacao');
     }
 
     return claims;
@@ -538,10 +545,13 @@ export class AdminAccessService implements OnApplicationBootstrap {
     });
 
     if (!project) {
-      throw new UnauthorizedException(
+      // O boot ja recusa subir sem ele; chegar aqui e banco mexido com o SSO no
+      // ar. O motivo fica no log: ao cliente, so o codigo.
+      this.logger.error(
         `o projeto "${SSO_SELF_PROJECT_NAME}" nao existe neste banco; ` +
           'rode o SQL de primeira subida do ambiente',
       );
+      throw new ApiException('internal_error');
     }
 
     this.selfProject = project;

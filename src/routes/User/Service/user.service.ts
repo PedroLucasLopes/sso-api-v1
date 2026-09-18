@@ -1,14 +1,11 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { User } from 'generated/prisma/client';
 import { PaginationConfig } from 'src/global/pagination/pagination';
 import { PrismaService } from 'src/global/prisma/prisma.service';
 import { FilterUser } from '../dto/filterUser.dto';
 import { CreateUser } from '../dto/createUser.dto';
 import { EditUser } from '../dto/editUser.dto';
+import { ApiException } from 'src/global/error/apiError';
 
 @Injectable()
 export class UserService {
@@ -47,7 +44,7 @@ export class UserService {
     });
 
     if (!users.length) {
-      throw new NotFoundException('No Users Found');
+      throw new ApiException('no_results');
     }
 
     return users;
@@ -68,7 +65,7 @@ export class UserService {
     });
 
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw new ApiException('user_not_found');
     }
 
     return user;
@@ -84,7 +81,7 @@ export class UserService {
     const user = await this.prisma.user.findUnique({ where: { id } });
 
     if (!user) {
-      throw new NotFoundException('User Not Found');
+      throw new ApiException('user_not_found');
     }
 
     const editUser = await this.prisma.user.update({
@@ -150,11 +147,11 @@ export class UserService {
     });
 
     if (outcome === 'not_found') {
-      throw new NotFoundException('User not found');
+      throw new ApiException('user_not_found');
     }
 
     if (outcome === 'has_projects') {
-      throw new BadRequestException('This user have ongoing permissions');
+      throw new ApiException('user_has_projects');
     }
   }
 }

@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import * as crypto from 'node:crypto';
 import { PrismaService } from 'src/global/prisma/prisma.service';
 import { PermissionSet } from '../dto/permissionSet.dto';
+import { ApiException } from 'src/global/error/apiError';
 
 /**
  * Resolve o conjunto de permissoes de um papel dentro de um projeto.
@@ -26,7 +27,7 @@ export class PermissionSetService {
     });
 
     if (!found) {
-      throw new NotFoundException(`papel ${role} nao existe neste projeto`);
+      throw new ApiException('role_not_found');
     }
 
     const permissions = found.permissions

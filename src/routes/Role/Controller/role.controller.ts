@@ -9,11 +9,9 @@ import {
   Post,
   Put,
   Query,
-  UseFilters,
 } from '@nestjs/common';
 import { Role } from 'generated/prisma/client';
 import { RoleService } from '../Service/role.service';
-import { PrismaExceptionValidationFilter } from 'src/global/error/prismaclientvalidationerror.exception';
 import { CreateRole } from '../dto/createRole.dto';
 import { EditRole } from '../dto/editRole.dto';
 import { FilterRole } from '../dto/filterRole.dto';
@@ -38,7 +36,6 @@ export class RoleController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseFilters(new PrismaExceptionValidationFilter())
   async createRole(
     @Body() data: CreateRole,
     @CurrentAdmin() admin: AdminIdentity,
