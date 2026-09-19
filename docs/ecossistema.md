@@ -225,6 +225,31 @@ estar no banco porque um dump permitiria personificar toda aplicação registrad
 
 ---
 
+## 🚀 CI/CD
+
+Cada repositório tem o próprio pipeline no GitHub Actions, e nenhum depende de outro para rodar.
+
+| Repositório | CI, em pull request e push na `main` | CD |
+|---|---|---|
+| `sso-api-v1`, `krloc-api-v1` | `npm audit`, lint, build, testes de unidade; no pull request, a imagem sem publicar | imagens da API e da migration no GitHub Container Registry, por push na `main` e tag `v*` |
+| `plataforma_sso-v1`, `plataforma_krloc-v1` | `npm audit`, lint, build com type-check e traduções; no pull request, a imagem sem publicar | imagem do nginx com o build no GitHub Container Registry |
+| `sso-lib-v1`, `components_storybook-v1` | `npm audit`, lint ou tipos, build, e o conteúdo do pacote | `publish.yml`: o pacote no GitHub Packages, por tag `v*` |
+
+- **O pipeline é superfície de ataque.** Toda action é fixada por commit, `permissions: {}` no topo e o
+  mínimo por job, checkout sem credencial persistida, nenhum `pull_request_target`. Só o job que publica
+  escreve no registro, e só fora de pull request.
+- **O que vai para produção não passa com aviso.** `npm audit --omit=dev --audit-level=moderate` recusa
+  qualquer aviso nas dependências de produção; o resto passa até moderado.
+- **Pacote privado no pipeline.** Quem instala `@pedrolucaslopes/*` lê o registro com o `GITHUB_TOKEN`
+  da execução, quando o pacote libera leitura ao repositório ("Manage Actions access", nas
+  configurações do pacote), ou com o secret `PACKAGES_READ_TOKEN`, token clássico com `read:packages`.
+- **O ponta a ponta fica na máquina.** `test:oauth` e `test:sso` precisam do SSO de pé, com banco e chave
+  de cliente: não rodam no pipeline.
+- **Dependabot** em todo repositório, toda semana: actions, imagem base e npm, este só onde não há
+  pacote privado, que pede um token próprio do Dependabot.
+
+---
+
 ## ☁️ Alvo de deploy: GCP no custo mínimo
 
 | Recurso | Cota Always Free | Região |
@@ -366,9 +391,16 @@ RFCs: 6749 (core), 7009 (revogação), 7523 (client assertion), 7636 (PKCE), 766
     Junto saíram do corpo o texto interno do Prisma, o motivo exato de token recusado e valores
     repetidos da requisição (RFC 9457 §3.1.4 e §5).
 
+28. **Segunda revisão de segurança e CI/CD.** Uma rodada nova do `PENTEST.md` de cada repositório,
+    sobre o que mudou: no KRLoc, contrato que nascia ativo ou concluído pelo corpo da requisição, data
+    sem teto que travava a API inteira na conta da cobrança, situação de contrato gravada pelo cadastro
+    de equipamento e coluna de planilha gravada sem filtro; nos fronts, o nginx de uma linha sem
+    manutenção; nas bibliotecas, a publicação com action por tag. Tudo corrigido, e cada repositório
+    ganhou pipeline no GitHub Actions. Ver "CI/CD".
+
 Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 174 asserções, e `npx jest` para
 as regras de proteção e os filtros de erro) e `test/sso-e2e.js` do `krloc-api-v1` (`npm run test:sso`,
-94 asserções, e `npx jest` para o contrato de erro). As
+94 asserções, e `npx jest` para a cobrança pelas cláusulas do contrato e o contrato de erro). As
 duas suítes ponta a ponta rodam contra a stack de pé, criam o que precisam e desfazem tudo no fim,
 inclusive quando quebram no meio.
 

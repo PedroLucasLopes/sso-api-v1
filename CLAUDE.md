@@ -69,6 +69,28 @@ quando quebra no meio. Precisa do SQL de primeira subida aplicado e de mais nenh
 
 ---
 
+## 🚀 CI/CD
+
+`.github/workflows/ci.yml`, no GitHub Actions:
+
+| Quando | O que roda |
+|---|---|
+| pull request e push na `main` | `npm ci`, `npm audit` (produção sem aviso nenhum; o resto, sem alto), `prisma generate`, `lint:check`, build e testes de unidade |
+| pull request | a imagem é montada, sem publicar |
+| push na `main`, tag `v*` e à mão | as imagens do SSO e da migration vão para o GitHub Container Registry, `ghcr.io/pedrolucaslopes/sso-api-v1` e `…-migrate`, com a tag do commit, `main` e a versão, proveniência e SBOM |
+
+- **`lint:check` é o lint sem `--fix`.** O `lint` do modelo do Nest corrige sozinho, e no pipeline isso
+  esconderia o erro em vez de recusar.
+- **O teste do fluxo OAuth fica na máquina.** `npm run test:oauth` precisa do SSO de pé, com banco.
+- **O pipeline é superfície de ataque.** Actions fixadas por commit, `permissions: {}` no topo e o
+  mínimo por job, checkout sem credencial persistida, sem `pull_request_target`. O Dependabot
+  (`.github/dependabot.yml`) abre pull request para as actions, o npm e a imagem base toda semana.
+- **O deploy no GCP ainda não existe.** A imagem publicada é o artefato. Subir para o Cloud Run entra
+  quando houver o projeto no GCP e a federação de identidade das Actions, sem chave de conta de serviço
+  guardada em secret.
+
+---
+
 ## 📁 Estrutura
 
 ```bash

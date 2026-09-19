@@ -1,0 +1,164 @@
+# Integracao e entrega continuas do sso-api-v1.
+#
+# CI, em pull request e em push na main: instalacao limpa, auditoria das
+# dependencias, lint, compilacao e testes de unidade. No pull request a imagem
+# tambem e montada, sem publicar.
+#
+# CD, em push na main, em tag v* e a mao: as imagens do SSO e da migration vao
+# para o GitHub Container Registry, com a tag do commit, `main` e a versao.
+#
+# O teste do fluxo OAuth (`npm run test:oauth`) roda contra o SSO de pe, com o
+# banco do ambiente: roda na maquina de quem desenvolve, nao aqui.
+#
+# O pipeline tambem e superficie de ataque: cada action e fixada por commit, e
+# nao por tag, que pode ser movida; cada job recebe so a permissao que usa; e o
+# checkout nao deixa credencial no disco para os passos seguintes.
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/pedrolucaslopes/sso-api-v1
+
+jobs:
+  check:
+    name: Auditoria, lint, build e testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar
+        run: npm ci
+
+      # O que vai para a imagem nao passa com aviso nenhum; o resto, sem alto.
+      - name: Auditar dependencias de producao
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Auditar todas as dependencias
+        run: npm audit --audit-level=high
+
+      - name: Gerar o client do Prisma
+        run: npx prisma generate
+
+      - run: npm run lint:check
+
+      - run: npm run build
+
+      - run: npm test -- --ci
+
+  image:
+    name: Imagem, sem publicar
+    if: github.event_name == 'pull_request'
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: runtime
+          pull: true
+          push: false
+          cache-from: type=gha,scope=runtime
+
+  publish:
+    name: Publicar imagens
+    if: github.event_name != 'pull_request'
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: runtime
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=short
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+
+      - id: migrate
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}-migrate
+          tags: |
+            type=sha,format=short
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+
+      # Proveniencia e SBOM vao junto da imagem: quem roda sabe de que commit e
+      # com que dependencias ela saiu.
+      - name: SSO
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: runtime
+          pull: true
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.runtime.outputs.tags }}
+          labels: ${{ steps.runtime.outputs.labels }}
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,mode=max,scope=runtime
+
+      # A migration roda como job separado, nunca no boot do SSO: com mais de uma
+      # instancia, migrar no start gera corrida entre replicas.
+      - name: Migration
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: migrate
+          pull: true
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.migrate.outputs.tags }}
+          labels: ${{ steps.migrate.outputs.labels }}
+          cache-from: type=gha,scope=migrate
+          cache-to: type=gha,mode=max,scope=migrate
