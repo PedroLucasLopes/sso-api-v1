@@ -1,3 +1,5 @@
+import { LoginStage } from './loginStep.dto';
+
 export class LoginProvider {
   id: 'google';
   label: string;
@@ -9,4 +11,6 @@ export class LoginRequestView {
   application: string | null;
   expiresAt: string;
   providers: LoginProvider[];
+  step: LoginStage | 'credentials';
+  email: string | null;
 }

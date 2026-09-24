@@ -54,6 +54,34 @@ export const API_ERRORS = {
     message: 'o projeto tem rotas',
   },
 
+  invalid_credentials: {
+    status: HttpStatus.UNAUTHORIZED,
+    message: 'Email or password refused',
+  },
+  account_locked: {
+    status: HttpStatus.TOO_MANY_REQUESTS,
+    message: 'Too many failed attempts; try again later',
+  },
+  password_refused: {
+    status: HttpStatus.BAD_REQUEST,
+    message: 'The new password was refused',
+  },
+  password_not_issued: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'This user has no password issued',
+  },
+  mfa_code_invalid: {
+    status: HttpStatus.UNAUTHORIZED,
+    message: 'Second factor code refused',
+  },
+  login_step_expired: {
+    status: HttpStatus.GONE,
+    message: 'The login step expired; start again',
+  },
+  no_pending_request: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'No pending login request in this browser',
+  },
   user_not_found: {
     status: HttpStatus.NOT_FOUND,
     message: 'usuario nao encontrado',

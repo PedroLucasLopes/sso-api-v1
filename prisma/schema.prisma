@@ -15,6 +15,8 @@ model User {
   authId       String?       @unique
   authSessions AuthSession[]
   projectUsers ProjectUser[]
+  password     UserPassword?
+  mfa          UserMfa?
 }
 
 /// Uma aplicacao cliente.
@@ -108,15 +110,15 @@ model ProjectUser {
 /// A privada e guardada cifrada com AES-256-GCM usando KEY_ENCRYPTION_KEY.
 /// `id` e publicado como `kid` no JWKS.
 model SigningKey {
-  id                 String    @id @default(uuid())
-  algorithm          String    @default("RS256")
-  publicKeyPem       String
-  privateKeyCipher   String
-  privateKeyIv       String
-  privateKeyAuthTag  String
-  status             KeyStatus @default(ACTIVE)
-  createdAt          DateTime  @default(now())
-  retiredAt          DateTime?
+  id                String    @id @default(uuid())
+  algorithm         String    @default("RS256")
+  publicKeyPem      String
+  privateKeyCipher  String
+  privateKeyIv      String
+  privateKeyAuthTag String
+  status            KeyStatus @default(ACTIVE)
+  createdAt         DateTime  @default(now())
+  retiredAt         DateTime?
 
   @@index([status])
 }
@@ -216,4 +218,34 @@ enum Method {
   UPDATE
   PUT
   PATCH
+}
+
+/// Senha emitida pelo SSO para uma pessoa. Nao ha cadastro por conta propria: a
+/// linha nasce quando um administrador emite, e a senha em claro aparece uma
+/// unica vez, na resposta da emissao. `mustChange` obriga a troca no primeiro
+/// acesso, para que depois dela ninguem alem da pessoa saiba a senha.
+model UserPassword {
+  userId      String    @id
+  hash        String
+  mustChange  Boolean   @default(true)
+  failedCount Int       @default(0)
+  lockedUntil DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Segundo fator por aplicativo (TOTP, RFC 6238). O segredo fica cifrado com a
+/// mesma chave que protege a chave privada das aplicacoes: um dump do banco nao
+/// basta para gerar codigo. `lastStep` recusa o mesmo codigo duas vezes, e os
+/// codigos de recuperacao sao guardados em hash, de uso unico.
+model UserMfa {
+  userId        String    @id
+  secret        String
+  confirmedAt   DateTime?
+  lastStep      Int?
+  recoveryCodes String[]  @default([])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

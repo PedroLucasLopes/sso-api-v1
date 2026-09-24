@@ -80,6 +80,22 @@ chega procura primeiro e onde a explicação não envelhece escondida ao lado de
 Ficam de fora só as diretivas que a ferramenta lê, como `eslint-disable` e `// no default`, e o texto
 de tela, que vive nos JSON de tradução.
 
+### Entrar com senha, com segundo fator
+
+O login deixou de ser só o Google. Cada pessoa entra com **e-mail e senha emitidas pelo SSO**, ou pelo
+Google se a conta já estiver vinculada, e nos dois casos há **segundo fator por aplicativo** (TOTP,
+RFC 6238), que ela cadastra no primeiro acesso.
+
+- **Ninguém cria acesso por conta própria.** A conta nasce no console e a senha é emitida por um
+  administrador, aparece uma vez e é trocada pela pessoa no primeiro acesso.
+- **A senha é coletada pela tela do IdP**, na origem do SSO. A aplicação nunca vê senha, e o grant de
+  senha do OAuth não existe no servidor (RFC 9700 §2.4).
+- **Perder o aplicativo é operação de administrador**: resetar o segundo fator no console. Há oito
+  códigos de recuperação, de uso único, entregues uma vez no cadastro.
+
+O detalhe de cada etapa, o bloqueio por tentativas e as rotas estão no
+[`CLAUDE.md` do SSO](https://github.com/PedroLucasLopes/sso-api-v1/blob/main/CLAUDE.md).
+
 ### Erro sai com código
 
 Toda API do ecossistema responde erro com um código estável no campo `error`, e o front escolhe o

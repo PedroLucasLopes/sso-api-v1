@@ -46,6 +46,7 @@ import { PermissionSetService } from './permissionSet.service';
 import { AuthorizationCodeService } from './authorizationCode.service';
 import { ClientAuthService } from './clientAuth.service';
 import { LoginPageService } from './loginPage.service';
+import { LoginStepService } from './loginStep.service';
 import { RefreshTokenService } from './refreshToken.service';
 import { TokenIssuerService } from './tokenIssuer.service';
 
@@ -66,6 +67,7 @@ export class AuthService {
     private permissionSets: PermissionSetService,
     private signingKeys: SigningKeyService,
     private loginPage: LoginPageService,
+    private steps: LoginStepService,
     config: ConfigService,
   ) {
     this.issuer = config.getOrThrow<string>('SSO_ISSUER').replace(/\/+$/, '');
@@ -267,33 +269,20 @@ export class AuthService {
       throw new LoginPageRedirectException('request_expired');
     }
 
-    const session = await this.authSessions.create(googleUser.userId);
+    this.storeTransaction(res, transaction);
 
-    this.cookies.set(
-      res,
-      SSO_SESSION_COOKIE,
-      {
-        authSessionId: session.id,
-        csrf: this.randomToken(32),
-      } satisfies SsoSessionCookie,
-      this.authSessions.maxAgeSeconds,
-    );
+    this.steps.open(res, {
+      userId: googleUser.userId,
+      email: googleUser.email,
+      stage: await this.steps.gateFor(googleUser.userId),
+    });
 
-    if (transaction.kind === 'session') {
-      await this.finishSessionLogin(res, googleUser.userId, transaction);
-      return;
-    }
-
-    await this.issueCodeAndRedirect(
-      res,
-      session.id,
-      googleUser.userId,
-      transaction,
-    );
+    res.redirect(this.loginPage.url());
   }
 
   pendingRequest(req: Request): LoginRequestView {
     const transaction = this.cookies.get<LoginTransaction>(req, SSO_TX_COOKIE);
+    const step = this.steps.read(req);
     const now = Math.floor(Date.now() / 1000);
 
     if (!transaction || now - transaction.createdAt > TX_COOKIE_TTL_SECONDS) {
@@ -312,6 +301,8 @@ export class AuthService {
       providers: [
         { id: 'google', label: 'Google', url: `${this.issuer}/oauth/google` },
       ],
+      step: step?.stage ?? 'credentials',
+      email: step?.email ?? null,
     };
   }
 
@@ -765,11 +756,40 @@ export class AuthService {
     return session;
   }
 
+  async completeLogin(
+    res: Response,
+    userId: string,
+    transaction: LoginTransaction,
+  ): Promise<string> {
+    const session = await this.authSessions.create(userId);
+
+    this.cookies.set(
+      res,
+      SSO_SESSION_COOKIE,
+      {
+        authSessionId: session.id,
+        csrf: this.randomToken(32),
+      } satisfies SsoSessionCookie,
+      this.authSessions.maxAgeSeconds,
+    );
+
+    return transaction.kind === 'session'
+      ? this.sessionLoginTarget(userId, transaction)
+      : this.codeTarget(session.id, userId, transaction);
+  }
+
   private async finishSessionLogin(
     res: Response,
     userId: string,
     transaction: SessionTransaction,
   ): Promise<void> {
+    res.redirect(await this.sessionLoginTarget(userId, transaction));
+  }
+
+  private async sessionLoginTarget(
+    userId: string,
+    transaction: SessionTransaction,
+  ): Promise<string> {
     const membership = await this.prisma.projectUser.findUnique({
       where: {
         userId_projectId: { userId, projectId: transaction.projectId },
@@ -789,7 +809,7 @@ export class AuthService {
     target.searchParams.set('state', transaction.state);
     target.searchParams.set('iss', this.issuer);
 
-    res.redirect(target.toString());
+    return target.toString();
   }
 
   private async issueCodeAndRedirect(
@@ -798,6 +818,14 @@ export class AuthService {
     userId: string,
     transaction: PkceTransaction,
   ): Promise<void> {
+    res.redirect(await this.codeTarget(authSessionId, userId, transaction));
+  }
+
+  private async codeTarget(
+    authSessionId: string,
+    userId: string,
+    transaction: PkceTransaction,
+  ): Promise<string> {
     const membership = await this.prisma.projectUser.findUnique({
       where: {
         userId_projectId: { userId, projectId: transaction.projectId },
@@ -832,6 +860,6 @@ export class AuthService {
       `authorization code emitido para o projeto ${transaction.clientId.slice(0, 8)}...`,
     );
 
-    res.redirect(target.toString());
+    return target.toString();
   }
 }
