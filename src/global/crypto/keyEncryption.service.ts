@@ -4,13 +4,6 @@ import { SealedKey } from './dto/sealedKey.dto';
 import { openParts, readKey, sealParts } from './aead';
 import { ApiException } from '../error/apiError';
 
-/**
- * Envelope encryption das chaves privadas de assinatura em repouso.
- *
- * A chave mestra (KEK) vem de KEY_ENCRYPTION_KEY e nunca toca o banco.
- * O que fica no Postgres e apenas o ciphertext, o IV e o auth tag, entao
- * um dump do banco sozinho nao permite forjar token.
- */
 @Injectable()
 export class KeyEncryptionService {
   private readonly kek: Buffer;
@@ -31,8 +24,6 @@ export class KeyEncryptionService {
     try {
       return openParts(this.kek, sealed);
     } catch {
-      // Auth tag invalido: ou a KEK mudou, ou a linha foi adulterada. O nome da
-      // variavel ajuda quem opera e nao deve chegar a quem chamou a API.
       this.logger.error(
         'Falha ao decifrar a chave de assinatura. Verifique KEY_ENCRYPTION_KEY.',
       );

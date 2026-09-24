@@ -15,10 +15,6 @@ import { ProjectUser } from 'generated/prisma/client';
 import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
 import { CurrentAdmin } from 'src/global/decorator/currentAdmin.decorator';
 
-/**
- * O vinculo e identificado pelo par projeto e pessoa, que e a chave dele no
- * banco. No catalogo, as rotas ficam `/projectuser/:projectId/:userId`.
- */
 @Controller('projectuser')
 export class ProjectUserController {
   constructor(private projectUserService: ProjectUserService) {}

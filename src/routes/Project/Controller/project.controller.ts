@@ -34,20 +34,12 @@ export class ProjectController {
     return await this.projectService.findById(id);
   }
 
-  /**
-   * Retrato completo: identidade, credencial, rotas, papeis e quem tem acesso
-   * com qual permissao. Responde numa chamada o que antes exigia cruzar cinco.
-   */
   @Get(':id/overview')
   @HttpCode(HttpStatus.OK)
   async overview(@Param('id') id: string): Promise<ProjectOverview> {
     return await this.projectService.overview(id);
   }
 
-  /**
-   * Liga ou corta o acesso da aplicacao ao SSO. Um projeto nasce PENDING:
-   * a autorizacao para usar o SSO nasce aqui dentro, nao na aplicacao.
-   */
   @Patch(':id/status')
   @HttpCode(HttpStatus.OK)
   async setStatus(

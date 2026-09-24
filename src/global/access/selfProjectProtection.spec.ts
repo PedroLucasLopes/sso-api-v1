@@ -12,14 +12,6 @@ import {
 const SSO_ID = 'projeto-sso';
 const APP_ID = 'projeto-app';
 
-/**
- * Banco de mentira com o minimo que as regras consultam: o nome de cada
- * projeto e quantos SUPERADMIN do SSO existem alem da pessoa em questao.
- *
- * Existe porque o teste ponta a ponta nao alcanca a regra do ultimo
- * SUPERADMIN: o operador dele ja e um segundo SUPERADMIN, e chegar ao ultimo
- * exigiria rebaixar a raiz real do ambiente.
- */
 function fakePrisma(otherRoots = 0) {
   const count = jest.fn().mockResolvedValue(otherRoots);
   const names: Record<string, string> = { [SSO_ID]: 'SSO', [APP_ID]: 'KRLOC' };
@@ -48,7 +40,6 @@ function admin(root: boolean): AdminIdentity {
   };
 }
 
-/** O codigo da recusa, ou `undefined` quando a regra deixa passar. */
 async function refusal(check: Promise<void>): Promise<string | undefined> {
   try {
     await check;

@@ -3,19 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { CookieOptions, Request, Response } from 'express';
 import { openCompact, readKey, sealCompact } from '../crypto/aead';
 
-/**
- * Cookies cifrados, usados no lugar do Redis para o estado que vive no
- * navegador durante o fluxo OAuth.
- *
- * RFC 10017 secao 6.1.3.2: Secure e HttpOnly sao MUST; SameSite, path `/`,
- * ausencia de Domain e prefixo `__Host-` sao SHOULD. O conteudo e cifrado
- * porque carrega dado de transacao, nao so um identificador opaco.
- *
- * Sobre o SameSite da transacao: o retorno do Google para o callback do SSO
- * e uma navegacao cross-site, e `Strict` nao acompanha esse salto. Por isso
- * o cookie de transacao e sempre `lax`, independente da configuracao. So a
- * sessao pode ser `strict`, e apenas quando tudo vive na mesma origem.
- */
 @Injectable()
 export class CookieService {
   private readonly key: Buffer;
@@ -35,11 +22,6 @@ export class CookieService {
       sameSite === 'strict' || sameSite === 'none' ? sameSite : 'lax';
   }
 
-  /**
-   * O prefixo `__Host-` so e valido em cookie Secure, com Path=/ e sem Domain.
-   * Em desenvolvimento sobre HTTP o navegador recusaria o cookie, entao o
-   * prefixo cai junto com o Secure.
-   */
   name(base: string): string {
     return this.secure ? `__Host-${base}` : base;
   }
@@ -65,7 +47,6 @@ export class CookieService {
     );
   }
 
-  /** Devolve null quando o cookie nao existe, expirou ou nao abre. */
   get<T>(req: Request, base: string): T | null {
     const raw = (req.cookies as Record<string, string> | undefined)?.[
       this.name(base)
@@ -84,13 +65,6 @@ export class CookieService {
     }
   }
 
-  /**
-   * Path e nome precisam bater com os do `set`, senao o navegador guarda um
-   * segundo cookie em vez de apagar o primeiro. `overrides` existe para o
-   * cookie de transacao, gravado sempre como `lax`: apagar com outro
-   * SameSite funcionaria, porque a identidade do cookie e (nome, dominio,
-   * caminho), mas deixaria os dois lados contraditorios.
-   */
   clear(
     res: Response,
     base: string,

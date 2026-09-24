@@ -42,10 +42,6 @@ import {
 export class AuthController {
   constructor(private authService: AuthService) {}
 
-  /**
-   * Inicio do fluxo. Com sessao viva no SSO emite o code direto; sem ela,
-   * guarda o pedido no cookie e manda a pessoa a tela de login do front.
-   */
   @Get('authorize')
   async authorize(
     @Query() query: Authorize,
@@ -57,9 +53,7 @@ export class AuthController {
 
   @Get('google')
   @UseGuards(GoogleAuthGuard)
-  googleLogin(): void {
-    // O guard redireciona para o Google; este handler nunca executa.
-  }
+  googleLogin(): void {}
 
   @Get('google/callback')
   @UseGuards(GoogleAuthGuard)
@@ -70,14 +64,7 @@ export class AuthController {
     await this.authService.completeGoogleLogin(req, res, req.user);
   }
 
-  /**
-   * RFC 6749 secao 5.1: a resposta do token endpoint MUST vir com
-   * `Cache-Control: no-store`. O filtro de erro repete o header, para que
-   * a resposta de falha tambem nao seja cacheada.
-   */
   @Post('token')
-  // Cada troca verifica assinatura RSA e escreve no banco. Adivinhar asercao de
-  // cliente e inviavel; o limite aqui e contra a repeticao que so consome.
   @Throttle({ default: { limit: 120, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
@@ -86,12 +73,6 @@ export class AuthController {
     return this.authService.exchangeToken(body);
   }
 
-  /**
-   * Resolve um papel no conjunto de rotas que ele libera.
-   *
-   * O access token carrega `roles`, nao a lista de rotas. A aplicacao vem
-   * aqui uma vez por papel e cacheia pelo `hash` devolvido.
-   */
   @Post('permissions')
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
@@ -99,11 +80,6 @@ export class AuthController {
     return this.authService.resolvePermissions(body);
   }
 
-  /**
-   * Revocation endpoint (RFC 7009). Responde 200 mesmo para token
-   * desconhecido, de proposito: a secao 2.2 nao quer o endpoint virando
-   * oraculo sobre quais tokens existem.
-   */
   @Post('revoke')
   @Throttle({ default: { limit: 120, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
@@ -112,18 +88,6 @@ export class AuthController {
     await this.authService.revokeToken(body);
   }
 
-  /**
-   * Introspection endpoint (RFC 7662): a aplicacao pergunta se o access token
-   * ainda vale e qual e o papel da pessoa agora.
-   *
-   * Token invalido, vencido, de outro cliente ou de grant encerrado responde 200
-   * com `{ active: false }`, que e o que a secao 2.2 manda; so cliente que nao
-   * se autentica recebe erro, 401 (secao 2.3).
-   *
-   * O limite e maior que o do token endpoint porque quem chama e o servidor da
-   * aplicacao, de um IP so, uma vez por sessao ativa a cada janela de cache:
-   * 1200 por minuto cobrem 600 sessoes ativas com janela de 30 segundos.
-   */
   @Post('introspect')
   @Throttle({ default: { limit: 1200, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
@@ -132,7 +96,6 @@ export class AuthController {
     return this.authService.introspect(body);
   }
 
-  /** Encerra a sessao no SSO e revoga os refresh tokens de todos os projetos. */
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   async logout(

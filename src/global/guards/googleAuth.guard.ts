@@ -16,14 +16,6 @@ export class GoogleAuthGuard extends AuthGuard('google') {
     super();
   }
 
-  /**
-   * So ha federacao com pedido pendente.
-   *
-   * A tela de login e o trecho do Google existem para devolver a pessoa a uma
-   * aplicacao que pediu. Sem pedido nao ha para onde voltar, e seguir ate o
-   * Google so terminaria num erro depois do consentimento. Quem chega aqui sem
-   * transacao volta a tela de login, que explica o motivo.
-   */
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<Request>();
 
@@ -38,14 +30,6 @@ export class GoogleAuthGuard extends AuthGuard('google') {
     return (await super.canActivate(context)) as boolean;
   }
 
-  /**
-   * Injeta o nonce da transacao como `state` da requisicao ao Google.
-   *
-   * O `passport-google-oauth20` roda com o proprio armazenamento de state
-   * desligado, porque ele depende de express-session e aqui nao ha sessao de
-   * servidor. Quem guarda e confere o nonce e o cookie de transacao, no
-   * AuthService. Sem isso o trecho SSO -> Google ficaria sem CSRF.
-   */
   getAuthenticateOptions(context: ExecutionContext): IAuthModuleOptions {
     const req = context.switchToHttp().getRequest<Request>();
 
@@ -55,13 +39,6 @@ export class GoogleAuthGuard extends AuthGuard('google') {
     };
   }
 
-  /**
-   * Traduz a recusa do provedor em algo que a pessoa entende.
-   *
-   * O padrao do Nest aqui e um 401 em JSON na aba do navegador, justamente no
-   * momento em que a pessoa mais precisa de explicacao: a conta nao esta
-   * cadastrada, ou ela cancelou o consentimento.
-   */
   handleRequest<TUser = unknown>(err: unknown, user: TUser): TUser {
     if (err instanceof IdentityProviderException) {
       throw new LoginPageRedirectException(err.code);
@@ -69,8 +46,6 @@ export class GoogleAuthGuard extends AuthGuard('google') {
 
     if (err) throw new LoginPageRedirectException('provider_error');
 
-    // O passport chama `fail()`, sem erro, quando o Google volta com
-    // `error=access_denied`: a pessoa cancelou o consentimento.
     if (!user) throw new LoginPageRedirectException('provider_denied');
 
     return user;

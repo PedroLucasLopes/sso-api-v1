@@ -52,16 +52,9 @@ export class ProjectService {
     return project;
   }
 
-  /**
-   * Todo projeto nasce com os papeis padrao, e eles nascem vazios: o que cada
-   * um alcanca e marcado depois, rota por rota.
-   */
   async createProject(data: CreateProject): Promise<Project> {
     const clientId = crypto.randomBytes(32).toString('hex');
 
-    // Devolve o registro criado, e nao o DTO de entrada: sem isso o console
-    // nunca fica sabendo o clientId gerado, que e justamente o que a
-    // aplicacao cliente precisa para se conectar.
     return this.prisma.project.create({
       data: {
         ...data,
@@ -78,7 +71,6 @@ export class ProjectService {
       throw new ApiException('project_not_found');
     }
 
-    // O SSO acha o próprio projeto pelo nome. Renomear tira a administracao do ar.
     if (project.name === SSO_SELF_PROJECT_NAME) {
       throw selfProjectProtected(
         'o projeto SSO nao pode ser renomeado: o proprio SSO se encontra por este nome',
@@ -93,14 +85,6 @@ export class ProjectService {
     return editProject;
   }
 
-  /**
-   * Liga ou corta o acesso da aplicacao ao SSO.
-   *
-   * E o ponto onde a autorizacao nasce: o projeto pode existir, ter rotas,
-   * papeis e usuarios, e ainda assim nao conseguir iniciar um fluxo enquanto
-   * nao estiver ACTIVE. Suspender derruba tambem a renovacao por refresh
-   * token, porque o token endpoint faz a mesma checagem.
-   */
   async setStatus(id: string, status: ProjectStatus): Promise<Project> {
     const project = await this.prisma.project.findUnique({ where: { id } });
 
@@ -108,7 +92,6 @@ export class ProjectService {
       throw new ApiException('project_not_found');
     }
 
-    // Fora de ACTIVE o SSO nao emite token nem para quem o administra.
     if (
       project.name === SSO_SELF_PROJECT_NAME &&
       status !== ProjectStatus.ACTIVE
@@ -123,8 +106,6 @@ export class ProjectService {
         where: { projectId: id, revokedAt: null },
       });
 
-      // Ativar sem chave deixaria a aplicacao passar no authorize e falhar
-      // so na troca do token, com erro confuso.
       if (keys === 0) {
         throw new ApiException('client_key_required');
       }
@@ -208,15 +189,6 @@ export class ProjectService {
     };
   }
 
-  /**
-   * Apaga o projeto e o que so existe por causa dele: papeis, redirect URIs e
-   * chaves de cliente. Recusa enquanto houver membros ou rotas, que precisam
-   * sair antes, por decisao de quem administra.
-   *
-   * Sem rotas nao ha permissao, entao os papeis que sobram estao vazios. Todo
-   * projeto nasce com os quatro padrao: sem apaga-los junto, nenhum projeto se
-   * apagaria, e a chave estrangeira viraria um 500.
-   */
   async deleteProject(id: string): Promise<void> {
     const project = await this.prisma.project.findUnique({
       where: { id },

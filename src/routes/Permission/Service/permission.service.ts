@@ -42,10 +42,6 @@ export class PermissionService {
     return createPermission;
   }
 
-  /**
-   * Busca antes de apagar: e o que da o 404 certo, e o que diz de qual projeto
-   * a permissao e. O `delete` direto estourava P2025 antes de chegar ao `if`.
-   */
   async deletePermission(id: string, admin: AdminIdentity): Promise<void> {
     const permission = await this.prisma.permission.findUnique({
       where: { id },

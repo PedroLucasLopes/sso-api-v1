@@ -64,7 +64,6 @@ export class RoleService {
     return role;
   }
 
-  /** Papel novo nasce vazio: o que ele alcanca e marcado depois, rota por rota. */
   async createRole(data: CreateRole, admin: AdminIdentity): Promise<Role> {
     const findProject = await this.prisma.project.findUnique({
       where: { id: data.projectId },

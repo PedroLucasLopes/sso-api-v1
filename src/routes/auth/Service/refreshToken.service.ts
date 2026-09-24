@@ -8,9 +8,7 @@ export interface IssueRefreshTokenParams {
   userId: string;
   projectId: string;
   authSessionId: string;
-  /** Ausente cria uma familia nova; presente continua a existente. */
   familyId?: string;
-  /** Teto absoluto herdado da familia. Nunca e estendido na rotacao. */
   expiresAt?: Date;
 }
 
@@ -21,22 +19,6 @@ export interface RotatedRefreshToken {
   authSessionId: string;
 }
 
-/**
- * Refresh token com rotacao obrigatoria e deteccao de reuso.
- *
- * RFC 9700 secao 2.2.2 exige, para cliente publico, refresh token
- * sender-constrained ou rotativo. RFC 10017 secao 6.3.2.3 acrescenta que o
- * AS MUST rotacionar a cada uso, MUST ter teto de validade e MUST NOT
- * estender esse teto na rotacao.
- *
- * Como o token e rotativo, apresentar um token ja consumido so acontece em
- * dois cenarios: corrida do cliente legitimo ou token roubado sendo usado em
- * paralelo. Nao da para distinguir os dois, entao o tratamento seguro e o
- * mesmo: revogar a familia inteira e forcar login novo.
- *
- * Guardamos apenas o SHA-256 do token. Vazamento do banco nao entrega
- * credencial utilizavel.
- */
 @Injectable()
 export class RefreshTokenService {
   private static readonly TOKEN_BYTES = 32;
@@ -82,17 +64,9 @@ export class RefreshTokenService {
     return raw;
   }
 
-  /**
-   * Consome o token apresentado e emite o proximo da mesma familia.
-   * Tudo numa transacao para que duas requisicoes simultaneas nao consigam
-   * consumir o mesmo token.
-   */
   async rotate(raw: string, projectId: string): Promise<RotatedRefreshToken> {
     const tokenHash = this.hash(raw);
 
-    // Nada e lancado de dentro da transacao: um throw dispararia rollback e
-    // desfaria a revogacao da familia, que e justamente a resposta de
-    // seguranca que precisa persistir.
     const outcome = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.refreshToken.findUnique({
         where: { tokenHash },
@@ -101,8 +75,6 @@ export class RefreshTokenService {
       if (!existing) return { kind: 'unknown' as const };
 
       if (existing.projectId !== projectId) {
-        // Token de outro cliente. Nao derruba a familia: quem errou foi quem
-        // apresentou, e revogar puniria o dono legitimo.
         return { kind: 'wrong_client' as const };
       }
 
@@ -120,7 +92,6 @@ export class RefreshTokenService {
         where: { id: existing.authSessionId },
       });
 
-      // RFC 10017 secao 6.3.2.3: a vida do refresh token acompanha a sessao.
       if (!session || session.revokedAt || session.expiresAt <= new Date()) {
         return { kind: 'session_gone' as const, familyId: existing.familyId };
       }
@@ -136,7 +107,6 @@ export class RefreshTokenService {
           userId: existing.userId,
           projectId: existing.projectId,
           authSessionId: existing.authSessionId,
-          // Teto herdado, nunca estendido.
           expiresAt: existing.expiresAt,
         },
       });
@@ -184,8 +154,6 @@ export class RefreshTokenService {
         throw new OAuthException('invalid_grant', 'sessao encerrada');
 
       case 'reused': {
-        // Reuso de token rotativo. Nao da para distinguir corrida do cliente
-        // legitimo de token roubado, entao o tratamento seguro e o mesmo.
         await this.revokeFamily(outcome.familyId);
 
         this.logger.warn(
@@ -207,24 +175,11 @@ export class RefreshTokenService {
     });
   }
 
-  /**
-   * Revogacao a pedido do cliente (RFC 7009).
-   *
-   * Derruba a familia inteira, e nao so o token apresentado: como a rotacao
-   * encadeia os tokens, deixar os irmaos vivos manteria a sessao renovavel e
-   * o logout nao significaria nada.
-   *
-   * Nao lanca quando o token e desconhecido. A RFC 7009 secao 2.2 manda o
-   * servidor responder 200 nesse caso, para nao virar oraculo que diz quais
-   * tokens existem.
-   */
   async revokeByToken(raw: string, projectId: string): Promise<boolean> {
     const existing = await this.prisma.refreshToken.findUnique({
       where: { tokenHash: this.hash(raw) },
     });
 
-    // Token de outro cliente: ignora em silencio. Um cliente nao pode
-    // derrubar a sessao de outro apresentando um token que capturou.
     if (!existing || existing.projectId !== projectId) return false;
 
     await this.revokeFamily(existing.familyId);
@@ -232,10 +187,6 @@ export class RefreshTokenService {
     return true;
   }
 
-  /**
-   * Usado quando um authorization code e reapresentado: a RFC 9700 secao
-   * 2.1.1 manda revogar tudo que foi emitido a partir daquele code.
-   */
   async revokeForSessionAndProject(
     authSessionId: string,
     projectId: string,

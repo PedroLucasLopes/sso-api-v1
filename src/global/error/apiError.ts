@@ -6,27 +6,7 @@ interface ApiErrorDefinition {
   message: string;
 }
 
-/**
- * O contrato de erro da API administrativa. Todo erro sai com um codigo estavel
- * no campo `error`, e e por ele que o console escolhe o texto, na lingua da tela:
- *
- *   { "statusCode": 404, "error": "project_not_found", "message": "projeto nao encontrado" }
- *
- * - **`error` e o contrato.** Codigo novo e acrescimo; renomear ou tirar um
- *   quebra o front que o traduz.
- * - **`message` e para quem le a resposta crua**, como o `detail` da RFC 9457
- *   secao 3.1.4. Nenhum front a mostra, e ela nunca carrega valor vindo da
- *   requisicao nem detalhe interno.
- * - **Valor que a tela precisa mostrar vai num membro proprio** (RFC 9457
- *   secao 3.2), nunca dentro do texto.
- *
- * Fora deste catalogo, e ja no mesmo formato: as recusas da protecao do projeto
- * `SSO` (`selfProjectProtection.ts`), as da redirect URI do console, as do
- * anti-CSRF e da origem, e o `no_pending_request` da tela de login. O OAuth tem
- * o formato da RFC 6749, com os codigos dela, em `routes/auth/error`.
- */
 export const API_ERRORS = {
-  // gerais
   no_results: {
     status: HttpStatus.NOT_FOUND,
     message: 'nenhum registro encontrado',
@@ -44,7 +24,6 @@ export const API_ERRORS = {
     message: 'erro interno',
   },
 
-  // quem chama
   login_required: {
     status: HttpStatus.UNAUTHORIZED,
     message: 'sem sessao nem access token',
@@ -58,7 +37,6 @@ export const API_ERRORS = {
     message: 'a conta nao tem papel no projeto SSO',
   },
 
-  // projeto
   project_not_found: {
     status: HttpStatus.NOT_FOUND,
     message: 'projeto nao encontrado',
@@ -76,7 +54,6 @@ export const API_ERRORS = {
     message: 'o projeto tem rotas',
   },
 
-  // usuario e membro
   user_not_found: {
     status: HttpStatus.NOT_FOUND,
     message: 'usuario nao encontrado',
@@ -90,7 +67,6 @@ export const API_ERRORS = {
     message: 'a pessoa nao e membro deste projeto',
   },
 
-  // papel, rota e permissao
   role_not_found: {
     status: HttpStatus.NOT_FOUND,
     message: 'papel nao encontrado',
@@ -112,13 +88,11 @@ export const API_ERRORS = {
     message: 'papel e rota sao de projetos diferentes',
   },
 
-  // redirect URI
   redirect_uri_not_found: {
     status: HttpStatus.NOT_FOUND,
     message: 'redirect URI nao encontrada',
   },
 
-  // chave de cliente
   client_key_not_found: {
     status: HttpStatus.NOT_FOUND,
     message: 'chave nao encontrada ou ja revogada',
@@ -143,13 +117,8 @@ export const API_ERRORS = {
 
 export type ApiErrorCode = keyof typeof API_ERRORS;
 
-/**
- * Membros extras do corpo, com o que a tela precisa para montar o texto. So
- * valor seguro de mostrar: nada de detalhe interno.
- */
 export type ApiErrorExtensions = Record<string, unknown>;
 
-/** O corpo do erro. Os membros fixos vencem qualquer extensao de mesmo nome. */
 export function apiErrorBody(
   code: ApiErrorCode,
   extensions: ApiErrorExtensions = {},
@@ -159,7 +128,6 @@ export function apiErrorBody(
   return { ...extensions, statusCode: status, error: code, message };
 }
 
-/** Para filtros, que escrevem a resposta sem passar por exception. */
 export function sendApiError(
   response: Response,
   code: ApiErrorCode,

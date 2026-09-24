@@ -11,10 +11,6 @@ export class CreateClientKey {
   @IsNotEmpty()
   projectId: string;
 
-  /**
-   * Chave publica do cliente em PEM (SPKI). O SSO nunca ve a privada, que e
-   * o ponto de usar `private_key_jwt` em vez de client_secret.
-   */
   @IsString()
   @IsNotEmpty()
   @Matches(/^-----BEGIN PUBLIC KEY-----[\s\S]+-----END PUBLIC KEY-----\s*$/, {
@@ -23,7 +19,6 @@ export class CreateClientKey {
   })
   publicKeyPem: string;
 
-  /** ISO 8601. Ausente significa sem expiracao. */
   @IsString()
   @IsOptional()
   expiresAt?: string;

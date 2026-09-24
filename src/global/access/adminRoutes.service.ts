@@ -14,20 +14,6 @@ export interface AdminRoute {
 
 const METHODS = new Set<string>(Object.values(Method));
 
-/**
- * As rotas administrativas que este servidor de fato expoe, lidas do proprio
- * roteador.
- *
- * Servem a raiz. O SUPERADMIN do projeto `SSO` alcanca toda rota sem consultar
- * o catalogo, e o console precisa de uma lista para desenhar menu, abas e
- * acoes. Num ambiente novo o catalogo esta vazio: sem esta lista, a raiz
- * entraria num console sem nada justamente quando precisa cadastrar tudo.
- *
- * Nao e catalogo, nem arquivo de sincronia. Nao liga rota a papel nenhum e nao
- * vale para mais ninguem: os outros papeis continuam vendo so o que
- * `Permission` concede. Ficam de fora as rotas `@Public()` e
- * `@Authenticated()`, que nao passam por permissao.
- */
 @Injectable()
 export class AdminRoutesService {
   private routes: AdminRoute[] | null = null;
@@ -38,7 +24,6 @@ export class AdminRoutesService {
     private reflector: Reflector,
   ) {}
 
-  /** Lida uma vez por processo: as rotas so mudam com deploy. */
   all(): AdminRoute[] {
     this.routes ??= this.discover();
 
@@ -114,7 +99,6 @@ export class AdminRoutesService {
     return [typeof value === 'string' ? value : ''];
   }
 
-  /** `project` e `:id/overview` viram `/project/:id/overview`, sem o prefixo global. */
   private join(prefix: string, suffix: string): string {
     const path = `/${prefix}/${suffix}`.replace(/\/{2,}/g, '/');
 

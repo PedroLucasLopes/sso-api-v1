@@ -10,14 +10,6 @@ import { EditProjectUser } from '../dto/editProjectUser.dto';
 import { ProjectUser } from 'generated/prisma/client';
 import { ApiException } from 'src/global/error/apiError';
 
-/**
- * Quem tem acesso a cada projeto, e com qual papel. Um papel por pessoa por
- * projeto: trocar de papel substitui o anterior.
- *
- * No projeto `SSO`, vincular alguem e conceder poder administrativo, entao so
- * a raiz vincula, troca e remove. Antes disto, um ADMIN conseguia colocar
- * qualquer conta como SUPERADMIN.
- */
 @Injectable()
 export class ProjectUserService {
   constructor(private prisma: PrismaService) {}
@@ -61,10 +53,6 @@ export class ProjectUserService {
     return createProjectUser;
   }
 
-  /**
-   * Troca o papel de quem ja e membro. O access token em circulacao continua
-   * com o papel antigo ate renovar; a renovacao ja sai com o novo.
-   */
   async changeRole(
     projectId: string,
     userId: string,
@@ -105,10 +93,6 @@ export class ProjectUserService {
     });
   }
 
-  /**
-   * Tira a pessoa do projeto. Os refresh tokens dela neste projeto caem junto
-   * do vinculo, entao a aplicacao nao renova mais nada para ela.
-   */
   async removeMember(
     projectId: string,
     userId: string,

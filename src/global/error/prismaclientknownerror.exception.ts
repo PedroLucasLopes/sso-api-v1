@@ -3,11 +3,6 @@ import { Response } from 'express';
 import { Prisma } from 'generated/prisma/client';
 import { sendApiError } from './apiError';
 
-/**
- * Erro do banco vira codigo, nunca texto do Prisma. A mensagem dele traz a
- * consulta, e com ela nomes de tabela, de coluna e ate valores gravados: fica
- * no log, e so o codigo e o alvo, que nao carregam dado de ninguem.
- */
 @Catch(Prisma.PrismaClientKnownRequestError)
 export class PrismaExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(PrismaExceptionFilter.name);

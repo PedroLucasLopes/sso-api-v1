@@ -12,11 +12,6 @@ import { ApiException } from 'src/global/error/apiError';
 import { FieldError } from 'src/global/error/validationError';
 import { AuthorizeRedirectException, OAuthException } from './oauth.exception';
 
-/**
- * Renderiza o erro do token endpoint no formato da RFC 6749 secao 5.2 e
- * garante `Cache-Control: no-store`, exigido pela secao 5.1 tanto na resposta
- * de sucesso quanto na de erro.
- */
 @Catch(OAuthException)
 export class OAuthExceptionFilter implements ExceptionFilter {
   catch(exception: OAuthException, host: ArgumentsHost): void {
@@ -25,9 +20,6 @@ export class OAuthExceptionFilter implements ExceptionFilter {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Pragma', 'no-cache');
 
-    // A RFC 6749 secao 5.2 pede o desafio de autenticacao quando o cliente
-    // se identificou mal e a resposta e 401.
-    // getStatus() devolve `number`, entao o enum e comparado como numero.
     if (exception.getStatus() === Number(HttpStatus.UNAUTHORIZED)) {
       res.setHeader('WWW-Authenticate', 'Bearer realm="sso"');
     }
@@ -39,16 +31,6 @@ export class OAuthExceptionFilter implements ExceptionFilter {
   }
 }
 
-/**
- * O ValidationPipe global recusa o corpo antes do service, no contrato de erro
- * da API (`validation_failed`, com os campos). No OAuth a resposta tem de ser a
- * da RFC 6749 secao 5.2: `invalid_request`, ou `unsupported_grant_type` quando o
- * que falhou foi so o valor do `grant_type`. A descricao e fixa: nome de campo
- * vindo do corpo poderia sair do conjunto de caracteres que a secao 5.2 permite.
- *
- * Qualquer outro `ApiException`, como o `role_not_found` do mapa de permissoes,
- * sai como veio.
- */
 @Catch(ApiException)
 export class OAuthValidationFilter implements ExceptionFilter {
   catch(exception: ApiException, host: ArgumentsHost): void {
@@ -84,15 +66,6 @@ export class OAuthValidationFilter implements ExceptionFilter {
   }
 }
 
-/**
- * Devolve o erro do authorization endpoint pela redirect_uri ja validada,
- * preservando o `state` para que o cliente consiga casar a resposta com a
- * requisicao que ele iniciou (RFC 6749 secao 4.1.2.1).
- *
- * Leva tambem o `iss`, como a resposta de sucesso. A RFC 9207 secao 2 o exige
- * em toda resposta de autorizacao, inclusive a de erro, e a secao 2.4 proibe o
- * cliente de supor que um erro veio do servidor certo sem conferi-lo.
- */
 @Catch(AuthorizeRedirectException)
 @Injectable()
 export class AuthorizeRedirectExceptionFilter implements ExceptionFilter {
@@ -100,8 +73,6 @@ export class AuthorizeRedirectExceptionFilter implements ExceptionFilter {
   private readonly issuer: string;
 
   constructor(config: ConfigService) {
-    // Sem barra no fim: o mesmo valor do `iss` do sucesso e do `issuer` do
-    // discovery, que a RFC 9207 secao 2.3 quer identicos.
     this.issuer = config.getOrThrow<string>('SSO_ISSUER').replace(/\/+$/, '');
   }
 

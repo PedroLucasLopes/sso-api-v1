@@ -48,46 +48,14 @@ type Credential =
       csrfToken: string | undefined;
     };
 
-/** Metodos que nao mudam estado. So estes passam sem token anti-CSRF. */
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-/**
- * Quem pode agir nas rotas administrativas do SSO, e em quais delas.
- *
- * Substitui os segredos estaticos `SSO_ADMIN_SECRET` e `SSO_SUPERADMIN_SECRET`.
- * Um segredo em header nao diz QUEM agiu, nao da para revogar para uma pessoa
- * so, e quem tem acesso ao repositorio vira administrador de fato. Aqui a
- * resposta vem toda do banco: a credencial diz quem e, e `ProjectUser`, `Role`
- * e `Permission` dizem o que essa pessoa pode.
- *
- * ## Duas credenciais, a mesma autorizacao
- *
- * - **`Authorization: Bearer`**, emitido para o projeto do SSO. E o caminho da
- *   linha de comando e dos testes.
- * - **Cookie de sessao do SSO.** E o caminho do console, que mora na mesma
- *   origem da API e se autentica pela propria sessao (RFC 10017 secao 7.1).
- *   Nenhum token chega ao JavaScript dele.
- *
- * O que muda entre as duas e so a identificacao. O papel, as permissoes e a
- * checagem por rota sao exatamente os mesmos, relidos do banco a cada pedido.
- *
- * ## A raiz
- *
- * O papel SUPERADMIN do projeto `SSO` alcanca toda rota administrativa sem
- * consultar o catalogo. E o que permite, num banco novo, cadastrar a primeira
- * rota: sem raiz, ninguem teria permissao para criar a primeira permissao. Os
- * outros papeis dependem de `Route` e `Permission`, cadastrados no console.
- *
- * O SSO e um `Project` de si mesmo, criado pelo SQL de primeira subida de cada
- * ambiente, junto do primeiro SUPERADMIN. Nao ha script nem seed para isso.
- */
 @Injectable()
 export class AdminAccessService implements OnApplicationBootstrap {
   private readonly logger = new Logger(AdminAccessService.name);
   private readonly issuer: string;
   private readonly prefix = `/${SSO_ROUTE_PREFIX}`;
 
-  /** O projeto do proprio SSO nao muda de id; a lista de permissoes muda. */
   private selfProject: SelfProject | null = null;
 
   private readonly matchers = new Map<string, RegExp>();
@@ -101,11 +69,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
     this.issuer = config.getOrThrow<string>('SSO_ISSUER').replace(/\/+$/, '');
   }
 
-  /**
-   * O SSO nao sobe sem o que o SQL de primeira subida cria: o projeto `SSO`
-   * ativo, um SUPERADMIN e uma redirect URI para o console. De pe sem isso, ele
-   * seria um servidor que ninguem consegue administrar.
-   */
   async onApplicationBootstrap(): Promise<void> {
     const project = await this.prisma.project.findUnique({
       where: { name: SSO_SELF_PROJECT_NAME },
@@ -120,47 +83,32 @@ export class AdminAccessService implements OnApplicationBootstrap {
       },
     });
 
-    const faltando: string[] = [];
+    const missing: string[] = [];
 
     if (!project) {
-      faltando.push(`o projeto "${SSO_SELF_PROJECT_NAME}"`);
+      missing.push(`o projeto "${SSO_SELF_PROJECT_NAME}"`);
     } else {
       if (project.status !== ProjectStatus.ACTIVE) {
-        faltando.push(`o projeto "${SSO_SELF_PROJECT_NAME}" ativo`);
+        missing.push(`o projeto "${SSO_SELF_PROJECT_NAME}" ativo`);
       }
 
       if (project.projectUsers.length === 0) {
-        faltando.push(`um usuario com o papel ${SSO_ROOT_ROLE}`);
+        missing.push(`um usuario com o papel ${SSO_ROOT_ROLE}`);
       }
 
       if (project._count.redirectUris === 0) {
-        faltando.push('uma redirect URI para o console');
+        missing.push('uma redirect URI para o console');
       }
     }
 
-    if (faltando.length > 0) {
+    if (missing.length > 0) {
       throw new Error(
-        `o SSO nao sobe sem ${faltando.join(', ')}. ` +
+        `o SSO nao sobe sem ${missing.join(', ')}. ` +
           'Rode o SQL de primeira subida deste ambiente.',
       );
     }
   }
 
-  /**
-   * Identifica quem chamou e resolve a identidade contra o banco.
-   *
-   * Com `Authorization` presente, vale so ele: um header ruim devolve 401 em
-   * vez de cair para o cookie, senao o cliente que errou o token nunca saberia.
-   *
-   * A claim `roles` do token e ignorada de proposito. Ela e verdadeira, mas
-   * congelada no momento da emissao: tirar o papel de alguem so faria efeito
-   * quando o access token expirasse. Para a superficie administrativa do
-   * proprio SSO isso e tempo demais, entao o papel e relido a cada pedido.
-   *
-   * `hideMembership` troca o 403 de quem nao tem papel no SSO pelo 404 de rota
-   * que nao existe. So o `/me` fica sem ele, porque o console precisa saber
-   * que falta papel para mostrar a tela de sem acesso.
-   */
   async authenticate(
     request: Request,
     response?: Response,
@@ -204,20 +152,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
     };
   }
 
-  /**
-   * Barra escrita forjada quando a credencial veio do cookie.
-   *
-   * O navegador anexa o cookie sozinho, inclusive quando outro site dispara a
-   * requisicao. Bearer nao tem esse problema, porque o navegador nunca o anexa.
-   * Por isso a checagem vale so para sessao e so para metodo que muda estado.
-   *
-   * Duas barreiras, a mesma defesa do `sso-client`:
-   * 1. **Token de dupla submissao.** A copia que vale mora dentro do cookie
-   *    cifrado; a legivel chega no header. Quem so consegue gravar cookie no
-   *    dominio nao produz um par que bata. Comparacao em tempo constante.
-   * 2. **`Origin`**, recusado quando presente e diferente do console ou do
-   *    proprio SSO. A lista vem das `redirect_uri` do projeto, no banco.
-   */
   async assertSessionWrite(
     request: Request,
     identity: AdminIdentity,
@@ -254,18 +188,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
     }
   }
 
-  /**
-   * Confere se a identidade alcanca esta rota. A raiz passa direto; os outros
-   * papeis precisam de `Permission` casando metodo e caminho.
-   *
-   * Sem permissao a resposta e 404, a mesma de um caminho que nao existe, e nao
-   * 403: quem nao pode usar a rota nao descobre que ela existe. A RFC 9110,
-   * secao 15.5.4, preve exatamente isso.
-   *
-   * Consulta o banco a cada requisicao, sem cache. A superficie
-   * administrativa tem trafego baixo e o preco de uma consulta indexada e
-   * menor do que o de uma permissao revogada continuar valendo.
-   */
   async authorize(request: Request, identity: AdminIdentity): Promise<void> {
     if (identity.root) return;
 
@@ -278,15 +200,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
     throw this.notFound(request);
   }
 
-  /**
-   * Rotas que esta identidade alcanca. Alimenta `GET /sso/me`, de onde o
-   * console tira menu, abas e acoes.
-   *
-   * Para a raiz, toda rota administrativa que o servidor expoe, lida do proprio
-   * roteador: ela alcanca todas sem depender do catalogo, e num ambiente novo o
-   * catalogo ainda esta vazio. Para os outros papeis, so o que `Permission`
-   * concede.
-   */
   async permissionsFor(
     identity: AdminIdentity,
   ): Promise<{ path: string; method: Method }[]> {
@@ -311,12 +224,10 @@ export class AdminAccessService implements OnApplicationBootstrap {
     }));
   }
 
-  /** Esvazia o cache do projeto, para o caso de ele ser recriado com o SSO de pe. */
   forgetSelfProject(): void {
     this.selfProject = null;
   }
 
-  /** O mesmo 404 que o roteador do Nest devolve para um caminho inexistente. */
   notFound(request: Request): NotFoundException {
     return new NotFoundException(
       `Cannot ${request.method} ${request.originalUrl}`,
@@ -359,12 +270,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
     };
   }
 
-  /**
-   * Identidade a partir do cookie de sessao do SSO.
-   *
-   * A sessao e relida do banco, entao logout e revogacao valem na hora, sem
-   * nenhum prazo de token para esperar.
-   */
   private async fromSession(
     request: Request,
     response?: Response,
@@ -392,9 +297,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
 
     let csrfToken = cookie.csrf;
 
-    // Sessao criada antes da defesa de CSRF chega sem token. Ganha um agora,
-    // com o prazo que ainda resta a ela: renovar o cookie por inteiro
-    // estenderia a sessao alem do que o banco permite.
     if (!csrfToken && response) {
       csrfToken = crypto.randomBytes(32).toString('base64url');
 
@@ -422,13 +324,8 @@ export class AdminAccessService implements OnApplicationBootstrap {
     };
   }
 
-  /**
-   * Token recusado sai com um codigo so, `invalid_token` (RFC 6750 secao 3.1).
-   * O motivo exato fica no log: a quem mandou, dizer qual conferencia falhou
-   * so ajuda a montar o proximo token forjado.
-   */
-  private invalidToken(motivo: string): ApiException {
-    this.logger.warn(`access token recusado: ${motivo}`);
+  private invalidToken(reason: string): ApiException {
+    this.logger.warn(`access token recusado: ${reason}`);
 
     return new ApiException('invalid_token');
   }
@@ -452,8 +349,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
       encodedHeader,
     );
 
-    // `alg` fixo no que o AS emite. Aceitar o que vem escrito no token e como
-    // se abre a confusao de algoritmo, inclusive `none`.
     if (!jwtHeader || jwtHeader.alg !== 'RS256' || !jwtHeader.kid) {
       throw this.invalidToken('cabecalho do token invalido');
     }
@@ -502,8 +397,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
       ? claims.aud
       : [claims.aud ?? ''];
 
-    // Sem esta conferencia o token que o krloc recebe abriria a administracao
-    // do SSO: mesma assinatura, mesmo emissor, outro publico.
     if (!audiences.includes(project.clientId)) {
       throw this.invalidToken('este token foi emitido para outra aplicacao');
     }
@@ -511,10 +404,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
     return claims;
   }
 
-  /**
-   * Origens que podem escrever com a sessao: a do proprio SSO e as das
-   * `redirect_uri` do projeto `SSO`. Lidas do banco, como o resto do acesso.
-   */
   private async consoleOrigins(): Promise<Set<string>> {
     const project = await this.resolveSelfProject();
 
@@ -529,7 +418,7 @@ export class AdminAccessService implements OnApplicationBootstrap {
       try {
         origins.add(new URL(redirectUri).origin);
       } catch {
-        // URI malformada no cadastro nao abre origem nenhuma.
+        continue;
       }
     }
 
@@ -545,8 +434,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
     });
 
     if (!project) {
-      // O boot ja recusa subir sem ele; chegar aqui e banco mexido com o SSO no
-      // ar. O motivo fica no log: ao cliente, so o codigo.
       this.logger.error(
         `o projeto "${SSO_SELF_PROJECT_NAME}" nao existe neste banco; ` +
           'rode o SQL de primeira subida do ambiente',
@@ -582,11 +469,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
     return upper in Method ? (upper as Method) : null;
   }
 
-  /**
-   * O padrao e montado a partir do caminho GUARDADO, nunca do caminho pedido.
-   * Ja houve o contrario no krloc: `new RegExp(req.path)` deixava um pedido a
-   * `/api/.*` casar com qualquer permissao.
-   */
   private matcher(permissionPath: string): RegExp {
     const cached = this.matchers.get(permissionPath);
 
@@ -608,23 +490,17 @@ export class AdminAccessService implements OnApplicationBootstrap {
     return matcher;
   }
 
-  /** Tira o prefixo global e a barra final, para comparar com a tabela `Route`. */
   private normalize(path: string): string {
     let normalized = path;
 
-    /* Recorta na FRONTEIRA. Sem o teste do proximo caractere, `/ssouser`
-     * viraria `/user` e um caminho que nao e desta aplicacao casaria com
-     * uma permissao dela. Hoje o roteador do Nest nao deixa chegar aqui,
-     * mas a normalizacao nao deve depender disso. */
-    const prefixo = this.prefix;
+    const prefix = this.prefix;
 
     if (
-      prefixo &&
-      normalized.startsWith(prefixo) &&
-      (normalized.length === prefixo.length ||
-        normalized[prefixo.length] === '/')
+      prefix &&
+      normalized.startsWith(prefix) &&
+      (normalized.length === prefix.length || normalized[prefix.length] === '/')
     ) {
-      normalized = normalized.slice(prefixo.length);
+      normalized = normalized.slice(prefix.length);
     }
 
     normalized = normalized.replace(/\/{2,}/g, '/');

@@ -8,17 +8,6 @@ import { CreateClientKey } from '../dto/createClientKey.dto';
 import { GeneratedClientKey } from '../dto/generatedClientKey.dto';
 import { ApiException } from 'src/global/error/apiError';
 
-/**
- * Cadastro das chaves publicas que cada aplicacao cliente usa para se
- * autenticar no token endpoint via `private_key_jwt` (RFC 7523 secao 2.2).
- *
- * Substitui o `clientSecret` que foi removido do schema. A diferenca pratica:
- * um dump deste banco nao permite se passar por nenhum cliente, porque so a
- * metade publica do par mora aqui.
- *
- * Chave do projeto `SSO` autentica o proprio SSO como cliente, entao so a raiz
- * cadastra, gera ou revoga uma.
- */
 @Injectable()
 export class ClientKeyService {
   constructor(private prisma: PrismaService) {}
@@ -50,8 +39,6 @@ export class ClientKeyService {
 
     await assertSelfWriter(this.prisma, admin, data.projectId);
 
-    // Rejeita PEM malformado antes de gravar: descobrir isso so na hora de
-    // verificar uma asserção transformaria erro de cadastro em falha de login.
     let publicKey: crypto.KeyObject;
 
     try {
@@ -79,16 +66,6 @@ export class ClientKeyService {
     });
   }
 
-  /**
-   * Gera o par dentro do SSO e devolve a privada UMA UNICA VEZ.
-   *
-   * O SSO guarda so a metade publica. A privada existe apenas na memoria
-   * desta requisicao e na resposta: nao vai para o banco, nao vai para log,
-   * nao e associada a nada automaticamente. Quem administra copia da resposta
-   * e entrega ao dono da aplicacao por canal seguro.
-   *
-   * Perdeu? Nao ha recuperacao. Revogue esta chave e gere outra.
-   */
   async generateKeyPair(
     projectId: string,
     admin: AdminIdentity,
@@ -126,10 +103,6 @@ export class ClientKeyService {
     };
   }
 
-  /**
-   * Revogacao e logica, nao fisica: manter a linha permite auditar qual chave
-   * assinou o que antes de ser descartada.
-   */
   async revoke(id: string, admin: AdminIdentity): Promise<void> {
     const key = await this.prisma.clientKey.findUnique({
       where: { id },

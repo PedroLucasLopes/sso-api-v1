@@ -9,7 +9,6 @@ import { Response } from 'express';
 import { LoginPageService } from '../Service/loginPage.service';
 import { LoginPageRedirectException } from './loginPage.exception';
 
-/** Devolve a pessoa a tela de login, com o codigo do que aconteceu. */
 @Catch(LoginPageRedirectException)
 @Injectable()
 export class LoginPageRedirectFilter implements ExceptionFilter {

@@ -1,16 +1,4 @@
-/*
- * Remove do banco o que uma suite de teste criou.
- *
- * Existe porque os testes rodam contra o banco de desenvolvimento de verdade,
- * e nao contra um descartavel. Sem isto, cada rodada deixava um projeto orfao
- * e, pior, um usuario com papel SUPERADMIN no projeto do proprio SSO.
- *
- * Apaga por ID e por e-mail exatos, nunca por padrao: uma limpeza que aceita
- * curinga e uma que um dia apaga dado real.
- */
-
-/** Ordem das tabelas ditada pelas chaves estrangeiras. */
-async function removerUsuarios(db, emails) {
+async function removeUsers(db, emails) {
   if (!emails.length) return 0;
 
   const { rows } = await db.query(
@@ -18,7 +6,7 @@ async function removerUsuarios(db, emails) {
     [emails],
   );
 
-  const ids = rows.map((linha) => linha.id);
+  const ids = rows.map((line) => line.id);
 
   if (!ids.length) return 0;
 
@@ -39,7 +27,7 @@ async function removerUsuarios(db, emails) {
   return ids.length;
 }
 
-async function removerProjetos(db, ids) {
+async function removeProjects(db, ids) {
   if (!ids.length) return 0;
 
   await db.query('DELETE FROM "RefreshToken" WHERE "projectId" = ANY($1)', [ids]);
@@ -59,15 +47,11 @@ async function removerProjetos(db, ids) {
   return ids.length;
 }
 
-/**
- * @param {{ usuarios?: string[], projetos?: string[] }} alvo
- *        `usuarios` sao e-mails, `projetos` sao ids.
- */
-async function limparTestes(db, alvo = {}) {
-  const projetos = await removerProjetos(db, alvo.projetos ?? []);
-  const usuarios = await removerUsuarios(db, alvo.usuarios ?? []);
+async function cleanTests(db, target = {}) {
+  const projects = await removeProjects(db, target.projects ?? []);
+  const users = await removeUsers(db, target.users ?? []);
 
-  return { projetos, usuarios };
+  return { projects, users };
 }
 
-module.exports = { limparTestes };
+module.exports = { cleanTests };

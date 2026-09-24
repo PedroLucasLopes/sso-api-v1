@@ -17,10 +17,6 @@ import { ApiException } from 'src/global/error/apiError';
 export class RedirectUriService {
   constructor(private prisma: PrismaService) {}
 
-  /**
-   * No projeto `SSO`, uma redirect URI tambem e origem que pode escrever pela
-   * sessao do console. Por isso cadastrar ali e coisa da raiz.
-   */
   async createRedirectUri(
     data: CreateRedirectUri,
     admin: AdminIdentity,
@@ -58,9 +54,6 @@ export class RedirectUriService {
       throw new ApiException('redirect_uri_not_found');
     }
 
-    /* Editar troca o endereco sem transicao: se for o do console, ele perde o
-     * login no mesmo instante. No SSO cadastra-se o novo e apaga-se o antigo,
-     * e a exclusao tem as travas certas. */
     if (await isSelfProject(this.prisma, findRedirectUri.projectId)) {
       throw selfProjectProtected(
         'no projeto SSO, redirect URI nao se edita: cadastre a nova e apague a antiga',
@@ -87,15 +80,6 @@ export class RedirectUriService {
     return updateRedirectUri;
   }
 
-  /**
-   * Tira o endereco de circulacao. O authorize deixa de aceita-lo na hora, e o
-   * token endpoint recusa code emitido para ele antes da exclusao.
-   *
-   * No projeto do proprio SSO sao estas URIs que deixam o console entrar. So a
-   * raiz apaga, e ainda com duas travas: a ultima nao sai, e ninguem apaga a da
-   * origem de onde esta pedindo. `origin` e o header da requisicao; a linha de
-   * comando nao o manda.
-   */
   async deleteRedirectUri(
     id: string,
     admin: AdminIdentity,
@@ -116,8 +100,6 @@ export class RedirectUriService {
           throw selfProjectProtected(SELF_WRITER_MESSAGE);
         }
 
-        // Serializa as exclusoes do projeto: duas pessoas apagando as duas
-        // ultimas URIs ao mesmo tempo nao deixam o console sem nenhuma.
         await tx.$executeRaw`SELECT id FROM "Project" WHERE id = ${record.projectId} FOR UPDATE`;
 
         const total = await tx.redirectUri.count({
@@ -139,8 +121,6 @@ export class RedirectUriService {
         }
       }
 
-      /* `deleteMany` com contagem: duas exclusoes simultaneas da mesma URI
-       * terminam em 204 e 404, sem P2025 no meio. */
       const { count } = await tx.redirectUri.deleteMany({ where: { id } });
 
       if (count === 0) {

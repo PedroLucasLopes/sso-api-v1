@@ -32,7 +32,6 @@ export class ClientKeyController {
     return this.clientKeyService.findByProject(projectId);
   }
 
-  /** Cadastra uma chave publica que o dono da aplicacao gerou na propria maquina. */
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(
@@ -42,14 +41,6 @@ export class ClientKeyController {
     return this.clientKeyService.create(data, admin);
   }
 
-  /**
-   * Gera o par dentro do SSO e devolve a privada UMA UNICA VEZ.
-   *
-   * A resposta carrega segredo, e quem administra cadastro comum nao precisa
-   * ver material de chave. Quem alcanca esta rota e decidido no catalogo, com
-   * `Permission`, e nao por decorator: a regra mora no banco e muda sem deploy.
-   * `no-store` impede que proxy ou navegador guardem a resposta.
-   */
   @Post('generate')
   @HttpCode(HttpStatus.CREATED)
   @Header('Cache-Control', 'no-store')

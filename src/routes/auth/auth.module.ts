@@ -21,9 +21,6 @@ import { GoogleStrategy } from './strategy/google.strategy';
   imports: [
     PrismaModule,
     PassportModule,
-    // Sem segredo global: a assinatura e RS256 e a chave privada vem do
-    // SigningKeyService a cada emissao, com o kid no header. A verificacao
-    // de asserção de cliente usa a chave publica do proprio cliente.
     JwtModule.register({}),
     KeyModule,
     ConfigModule,

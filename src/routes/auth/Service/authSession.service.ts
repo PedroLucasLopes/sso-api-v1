@@ -3,17 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { AuthSession } from 'generated/prisma/client';
 import { PrismaService } from 'src/global/prisma/prisma.service';
 
-/**
- * Sessao do usuario com o proprio SSO, criada apos o login no Google.
- *
- * E o que faz este servidor ser de fato single sign-on: com uma sessao viva,
- * entrar num segundo projeto nao passa de novo pelo Google. Antes isso nao
- * existia, e todo /authorize refazia a federacao inteira.
- *
- * Tambem e a ancora de revogacao. RFC 10017 secao 6.3.2.3 recomenda amarrar
- * a vida do refresh token a esta sessao, entao encerra-la derruba os tokens
- * de todos os projetos de uma vez.
- */
 @Injectable()
 export class AuthSessionService {
   private static readonly DEFAULT_TTL_SECONDS = 12 * 60 * 60;
@@ -50,7 +39,6 @@ export class AuthSessionService {
     });
   }
 
-  /** Devolve null para sessao inexistente, revogada ou expirada. */
   async findValid(id: string): Promise<AuthSession | null> {
     const session = await this.prisma.authSession.findUnique({ where: { id } });
 
@@ -75,22 +63,15 @@ export class AuthSessionService {
     });
   }
 
-  /**
-   * Housekeeping: sessao vencida ha mais de um dia nao serve mais a ninguem.
-   *
-   * O refresh token e o authorization code apontam para a sessao, entao saem
-   * antes dela. Apagar so a `AuthSession` batia na chave estrangeira e a
-   * limpeza inteira falhava, sem limpar nada.
-   */
   async purgeExpired(): Promise<number> {
-    const corte = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
     return this.prisma.$transaction(async (tx) => {
-      const vencidas = await tx.authSession.findMany({
-        where: { expiresAt: { lt: corte } },
+      const expired = await tx.authSession.findMany({
+        where: { expiresAt: { lt: cutoff } },
         select: { id: true },
       });
-      const ids = vencidas.map((sessao) => sessao.id);
+      const ids = expired.map((session) => session.id);
 
       if (ids.length === 0) return 0;
 

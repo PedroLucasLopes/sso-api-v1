@@ -49,27 +49,6 @@ import { LoginPageService } from './loginPage.service';
 import { RefreshTokenService } from './refreshToken.service';
 import { TokenIssuerService } from './tokenIssuer.service';
 
-/**
- * Orquestra o Authorization Code + PKCE.
- *
- * Mudancas em relacao a versao anterior, todas vindas das RFCs:
- *  - o estado de transacao saiu do Redis para um cookie cifrado, o que amarra
- *    o fluxo ao navegador (RFC 9700 secao 2.1) em vez de a um `state` que o
- *    cliente escolhe;
- *  - o authorization code foi para o Postgres, com uso unico atomico
- *    (RFC 6749 secao 4.1.2) e revogacao em caso de reapresentacao
- *    (RFC 9700 secao 2.1.1);
- *  - erros seguem o formato e a ordem das secoes 4.1.2.1 e 5.2 da RFC 6749;
- *  - existe uma sessao do usuario com o proprio SSO, que e o que torna este
- *    servidor de fato single sign-on.
- *
- * ## A tela de login so existe dentro de um pedido
- *
- * Sem sessao, ninguem vai direto ao Google: a pessoa passa pela tela de login
- * do front, a interface do IdP, que mostra em qual aplicacao ela esta entrando.
- * E essa tela so oferece login quando ha um pedido pendente, criado por uma
- * aplicacao que viu alguem sem sessao. Visitada direto, ela nao faz nada.
- */
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -93,10 +72,6 @@ export class AuthService {
     this.basePath = new URL(this.issuer).pathname.replace(/\/+$/, '');
   }
 
-  // ------------------------------------------------------------------ //
-  // Authorization endpoint
-  // ------------------------------------------------------------------ //
-
   async beginAuthorization(
     query: Authorize,
     req: Request,
@@ -107,16 +82,10 @@ export class AuthService {
       include: { redirectUris: { select: { redirectUri: true } } },
     });
 
-    // RFC 6749 secao 4.1.2.1: com client_id ou redirect_uri invalidos o
-    // servidor NAO pode redirecionar, sob pena de virar open redirect.
     if (!project) {
       throw new OAuthException('invalid_request', 'client_id desconhecido');
     }
 
-    // A autorizacao para usar o SSO nasce dentro do SSO. Existir no cadastro
-    // nao basta: enquanto o projeto nao for ativado por um administrador, ou
-    // depois de suspenso, ele nao inicia fluxo nenhum. Tambem nao redireciona,
-    // pela mesma razao do caso acima.
     if (project.status !== ProjectStatus.ACTIVE) {
       this.logger.warn(
         `authorize recusado: projeto ${project.name} esta ${project.status}`,
@@ -128,7 +97,6 @@ export class AuthService {
       );
     }
 
-    // Comparacao de string exata, exigida pela RFC 9700 secao 2.1.
     const allowed = project.redirectUris.some(
       (r) => r.redirectUri === query.redirect_uri,
     );
@@ -140,7 +108,6 @@ export class AuthService {
       );
     }
 
-    // A partir daqui a redirect_uri e confiavel e todo erro volta por ela.
     const fail = (error: OAuthErrorCode, description: string) =>
       new AuthorizeRedirectException(
         query.redirect_uri,
@@ -186,8 +153,6 @@ export class AuthService {
 
     const session = await this.currentSession(req, res);
 
-    // Sessao viva: este e o "single" do single sign-on. Sem ela, todo
-    // /authorize refaria a federacao com o Google.
     if (session) {
       await this.authSessions.touch(session.id);
       await this.issueCodeAndRedirect(
@@ -201,20 +166,9 @@ export class AuthService {
 
     this.storeTransaction(res, transaction);
 
-    // A pessoa vai a tela de login do front, e nao direto ao Google. E ela
-    // que diz em qual aplicacao a pessoa esta entrando e oferece os provedores.
     res.redirect(this.loginPage.url());
   }
 
-  /**
-   * Login do console do proprio SSO.
-   *
-   * Mesma ordem de validacao do authorize: `redirect_uri` exata na lista do
-   * projeto `SSO` antes de qualquer redirect, e so depois o resto, com o erro
-   * voltando por ela. A diferenca e a volta: sem code, so o `state`. O console
-   * se autentica pela sessao do SSO, na mesma origem da API (RFC 10017 secao
-   * 7.1), entao nao ha token a trocar.
-   */
   async beginSessionLogin(
     query: SessionLogin,
     req: Request,
@@ -290,21 +244,16 @@ export class AuthService {
 
     this.cookies.clear(res, SSO_TX_COOKIE, { sameSite: 'lax' });
 
-    // O guard ja barra quem chega sem transacao. Isto cobre a corrida em que
-    // o cookie expira entre o guard e aqui.
     if (!transaction) {
       throw new LoginPageRedirectException('request_expired');
     }
 
-    // O maxAge do cookie ja limita, mas o relogio do cliente nao e confiavel.
     const age = Math.floor(Date.now() / 1000) - transaction.createdAt;
 
     if (age > TX_COOKIE_TTL_SECONDS) {
       throw new LoginPageRedirectException('request_expired');
     }
 
-    // Fecha o CSRF no trecho SSO -> Google: o `state` que o provedor devolve
-    // tem de ser o nonce que guardamos no cookie desta transacao.
     const returnedNonce = (req.query as Record<string, unknown>)?.state;
 
     if (
@@ -315,8 +264,6 @@ export class AuthService {
         'state do provedor nao confere com o nonce da transacao',
       );
 
-      // Nenhuma sessao e criada. Para a pessoa a mensagem e "recomece pela
-      // aplicacao": o caso comum aqui e uma aba antiga, nao um ataque.
       throw new LoginPageRedirectException('request_expired');
     }
 
@@ -345,13 +292,6 @@ export class AuthService {
     );
   }
 
-  /**
-   * O pedido que a tela de login esta atendendo.
-   *
-   * 404 quando nao ha pedido: a tela nao oferece provedor nenhum e explica que
-   * precisa ser aberta por uma aplicacao. Nada sensivel sai daqui, so o nome
-   * da aplicacao e o endereco que inicia a federacao.
-   */
   pendingRequest(req: Request): LoginRequestView {
     const transaction = this.cookies.get<LoginTransaction>(req, SSO_TX_COOKIE);
     const now = Math.floor(Date.now() / 1000);
@@ -374,10 +314,6 @@ export class AuthService {
       ],
     };
   }
-
-  // ------------------------------------------------------------------ //
-  // Token endpoint
-  // ------------------------------------------------------------------ //
 
   async exchangeToken(body: Token): Promise<TokenResponse> {
     const project = await this.clientAuth.authenticate(body);
@@ -422,9 +358,6 @@ export class AuthService {
       );
     }
 
-    /* A redirect_uri pode ter saido do projeto depois de o code ser emitido,
-     * inclusive por um login que ainda estava no Google. Apagar o endereco o
-     * tira de circulacao na hora: code emitido para ele nao vira token. */
     const stillRegistered = await this.prisma.redirectUri.findUnique({
       where: {
         projectId_redirectUri: {
@@ -488,11 +421,6 @@ export class AuthService {
     );
   }
 
-  /**
-   * Monta o par de tokens. As permissoes sao lidas do banco a cada emissao,
-   * entao mudanca de papel passa a valer no proximo access token, que dura
-   * minutos, e nao mais no proximo login, que durava quinze dias.
-   */
   private async buildTokenResponse(
     userId: string,
     projectId: string,
@@ -515,8 +443,6 @@ export class AuthService {
       );
     }
 
-    // O token leva o PAPEL, nao a lista de rotas. A aplicacao resolve uma
-    // coisa na outra e cacheia pelo hash.
     const { hash } = await this.permissionSets.forRole(
       projectId,
       projectUser.role.name,
@@ -540,43 +466,22 @@ export class AuthService {
     };
   }
 
-  /**
-   * Revogacao (RFC 7009).
-   *
-   * A secao 2 pede `MUST` para refresh token e `SHOULD` para access token, e a
-   * secao 2.1 manda, ao revogar um refresh token, invalidar tambem o que saiu
-   * do mesmo grant. Aqui os dois tipos sao aceitos e os dois derrubam a MESMA
-   * coisa: a familia de refresh tokens daquela sessao, naquele projeto. Depois
-   * disso a sessao nao renova mais, e e isso que encerra o acesso de verdade.
-   *
-   * O `token_type_hint` e otimizacao, nao instrucao. A secao 2.1 diz que, se o
-   * servidor nao achar o token pela dica, ele tem de procurar nos outros tipos.
-   * E o que o laco abaixo faz.
-   *
-   * ⚠️ **O access token ja emitido continua verificando ate expirar.** Ele e
-   * assinado e conferido sem consulta ao servidor, que e justamente o que torna
-   * a arquitetura barata: o RP nao fala com o SSO a cada requisicao. A RFC
-   * 10017 secao 6.2.4 reconhece esse limite. Derruba-lo de fato exigiria o RP
-   * consultar uma lista de revogados a cada chamada, e o preco disso e a
-   * propriedade que se quis preservar. A mitigacao e o token ser curto: 15
-   * minutos por padrao, e e por isso que esse numero nao deve crescer.
-   */
   async revokeToken(body: Revoke): Promise<void> {
     const project = await this.clientAuth.authenticate(body);
 
-    const ordem: ('refresh' | 'access')[] =
+    const order: ('refresh' | 'access')[] =
       body.token_type_hint === 'access_token'
         ? ['access', 'refresh']
         : ['refresh', 'access'];
 
-    for (const tipo of ordem) {
-      if (tipo === 'refresh') {
-        const revogado = await this.refreshTokens.revokeByToken(
+    for (const kind of order) {
+      if (kind === 'refresh') {
+        const revoked = await this.refreshTokens.revokeByToken(
           body.token,
           project.id,
         );
 
-        if (revogado) {
+        if (revoked) {
           this.logger.log(`refresh token revogado a pedido de ${project.name}`);
           return;
         }
@@ -590,33 +495,20 @@ export class AuthService {
       );
 
       if (authSessionId) {
-        const derrubados = await this.refreshTokens.revokeForSessionAndProject(
+        const dropped = await this.refreshTokens.revokeForSessionAndProject(
           authSessionId,
           project.id,
         );
 
         this.logger.log(
-          `access token revogado a pedido de ${project.name}: ${derrubados} refresh token(s) da mesma sessao`,
+          `access token revogado a pedido de ${project.name}: ${dropped} refresh token(s) da mesma sessao`,
         );
 
         return;
       }
     }
-
-    // Nao vaza se o token existia: a RFC 7009 secao 2.2 manda responder 200
-    // tambem para token desconhecido, senao o endpoint vira oraculo.
   }
 
-  /**
-   * Le o `sid` de um access token que este servidor emitiu para este cliente.
-   *
-   * Devolve null para qualquer coisa que nao seja isso, sem distinguir o
-   * motivo: quem chama responde 200 de todo jeito.
-   *
-   * A validade NAO e conferida de proposito. Revogar a partir de um token ja
-   * expirado e o caso comum: a pessoa ficou parada e clicou em sair. Recusar
-   * ali deixaria a familia de refresh tokens viva, que e o oposto do pedido.
-   */
   private async sessionFromAccessToken(
     token: string,
     clientId: string,
@@ -624,13 +516,6 @@ export class AuthService {
     return (await this.accessTokenClaims(token, clientId))?.sid ?? null;
   }
 
-  /**
-   * As claims de um access token que este servidor emitiu para este cliente,
-   * com a assinatura conferida. `null` para qualquer outra coisa.
-   *
-   * Nao olha `exp`: cada chamador decide. O revoke aceita token vencido, e a
-   * introspeccao nao.
-   */
   private async accessTokenClaims(
     token: string,
     clientId: string,
@@ -643,41 +528,38 @@ export class AuthService {
     exp?: number;
     iat?: number;
   } | null> {
-    const partes = token.split('.');
+    const parts = token.split('.');
 
-    if (partes.length !== 3) return null;
+    if (parts.length !== 3) return null;
 
-    const [cabecalho, corpo, assinatura] = partes;
+    const [encodedHeader, encodedPayload, encodedSignature] = parts;
 
-    const decodificar = <T>(parte: string): T | null => {
+    const decode = <T>(part: string): T | null => {
       try {
-        return JSON.parse(
-          Buffer.from(parte, 'base64url').toString('utf8'),
-        ) as T;
+        return JSON.parse(Buffer.from(part, 'base64url').toString('utf8')) as T;
       } catch {
         return null;
       }
     };
 
-    const header = decodificar<{ alg?: string; kid?: string }>(cabecalho);
+    const header = decode<{ alg?: string; kid?: string }>(encodedHeader);
 
-    // Allowlist fechada de algoritmo, como em toda verificacao deste servidor.
     if (!header || header.alg !== 'RS256' || !header.kid) return null;
 
     const publicKeyPem = await this.signingKeys.publicKeyFor(header.kid);
 
     if (!publicKeyPem) return null;
 
-    const confere = crypto.verify(
+    const checks = crypto.verify(
       'sha256',
-      Buffer.from(`${cabecalho}.${corpo}`),
+      Buffer.from(`${encodedHeader}.${encodedPayload}`),
       crypto.createPublicKey(publicKeyPem),
-      Buffer.from(assinatura, 'base64url'),
+      Buffer.from(encodedSignature, 'base64url'),
     );
 
-    if (!confere) return null;
+    if (!checks) return null;
 
-    const claims = decodificar<{
+    const claims = decode<{
       iss?: string;
       aud?: string;
       sub?: string;
@@ -685,13 +567,11 @@ export class AuthService {
       jti?: string;
       exp?: number;
       iat?: number;
-    }>(corpo);
+    }>(encodedPayload);
 
     if (!claims?.sid || !claims.sub) return null;
     if (claims.iss !== this.issuer) return null;
 
-    // Um cliente nao derruba nem consulta a sessao de outro apresentando um
-    // token capturado.
     if (claims.aud !== clientId) return null;
 
     return {
@@ -705,55 +585,32 @@ export class AuthService {
     };
   }
 
-  /**
-   * Introspeccao (RFC 7662): o token ainda vale, e qual e o papel da pessoa
-   * agora?
-   *
-   * O access token e assinado e verificado sem consulta, e por isso continuava
-   * valendo ate expirar depois de o SSO mudar de ideia sobre ele: papel
-   * trocado, pessoa tirada do projeto, aplicacao suspensa, logout. Este endpoint
-   * e a consulta que fecha essa janela. A aplicacao pergunta de tempos em tempos
-   * e, quando o papel mudou, pede um token novo na hora.
-   *
-   * Ativo exige tudo isto, e qualquer falta responde so `{ active: false }`:
-   *
-   * - assinatura, `iss` e `aud` deste cliente, e `exp` no futuro;
-   * - a sessao do SSO (`sid`) viva e da mesma pessoa;
-   * - a pessoa ainda com papel no projeto;
-   * - um refresh token vivo no mesmo grant. Logout e revogacao (RFC 7009)
-   *   derrubam a familia, e a secao 2.1 daquela RFC manda o access token do
-   *   mesmo grant cair junto: e aqui que isso passa a valer de verdade;
-   * - o projeto ativo, que `authenticate` ja confere.
-   *
-   * Token de outro cliente responde inativo, e nao erro: a RFC 7662 secao 4
-   * nao quer o endpoint dizendo que o token existe.
-   */
   async introspect(body: Introspect): Promise<IntrospectionResponse> {
     const project = await this.clientAuth.authenticate(body);
-    const inativo: IntrospectionResponse = { active: false };
+    const inactive: IntrospectionResponse = { active: false };
 
     const claims = await this.accessTokenClaims(body.token, project.clientId);
 
-    if (!claims) return inativo;
+    if (!claims) return inactive;
 
-    const agora = Math.floor(Date.now() / 1000);
+    const now = Math.floor(Date.now() / 1000);
 
-    if (typeof claims.exp !== 'number' || claims.exp <= agora) return inativo;
+    if (typeof claims.exp !== 'number' || claims.exp <= now) return inactive;
 
-    const sessao = await this.authSessions.findValid(claims.sid);
+    const session = await this.authSessions.findValid(claims.sid);
 
-    if (!sessao || sessao.userId !== claims.sub) return inativo;
+    if (!session || session.userId !== claims.sub) return inactive;
 
-    const vinculo = await this.prisma.projectUser.findUnique({
+    const membership = await this.prisma.projectUser.findUnique({
       where: {
         userId_projectId: { userId: claims.sub, projectId: project.id },
       },
       include: { role: { select: { name: true } } },
     });
 
-    if (!vinculo) return inativo;
+    if (!membership) return inactive;
 
-    const grantVivo = await this.prisma.refreshToken.findFirst({
+    const liveGrant = await this.prisma.refreshToken.findFirst({
       where: {
         userId: claims.sub,
         projectId: project.id,
@@ -765,11 +622,11 @@ export class AuthService {
       select: { id: true },
     });
 
-    if (!grantVivo) return inativo;
+    if (!liveGrant) return inactive;
 
     const { hash } = await this.permissionSets.forRole(
       project.id,
-      vinculo.role.name,
+      membership.role.name,
     );
 
     return {
@@ -783,31 +640,20 @@ export class AuthService {
       exp: claims.exp,
       iat: claims.iat,
       sid: claims.sid,
-      roles: [vinculo.role.name],
+      roles: [membership.role.name],
       perm: hash,
     };
   }
-  /**
-   * Resolve um papel no conjunto de rotas que ele libera.
-   *
-   * A aplicacao cliente chama uma vez por papel, guiada pela claim `roles` do
-   * token, e cacheia pelo `hash`. E o outro lado do token magro.
-   */
   async resolvePermissions(body: ResolvePermissions): Promise<PermissionSet> {
     const project = await this.clientAuth.authenticate(body);
 
     return this.permissionSets.forRole(project.id, body.role);
   }
 
-  // ------------------------------------------------------------------ //
-  // Sessao
-  // ------------------------------------------------------------------ //
-
   async logout(req: Request, res: Response): Promise<void> {
     const cookie = this.cookies.get<SsoSessionCookie>(req, SSO_SESSION_COOKIE);
 
     if (cookie?.authSessionId) {
-      // Encerrar a sessao derruba os refresh tokens de todos os projetos.
       await this.refreshTokens.revokeForSession(cookie.authSessionId);
       await this.authSessions.revoke(cookie.authSessionId);
     }
@@ -816,13 +662,6 @@ export class AuthService {
     this.cookies.clear(res, SSO_TX_COOKIE, { sameSite: 'lax' });
   }
 
-  /**
-   * Estado da sessao deste navegador.
-   *
-   * Nao exige papel em projeto nenhum: quem entrou mas nao tem acesso ao
-   * console ainda precisa do token anti-CSRF para conseguir sair. Sessao antiga,
-   * sem token, ganha um aqui, com o prazo que ainda resta a ela.
-   */
   async describeSession(req: Request, res: Response): Promise<SessionView> {
     const cookie = this.cookies.get<SsoSessionCookie>(req, SSO_SESSION_COOKIE);
 
@@ -870,11 +709,6 @@ export class AuthService {
     };
   }
 
-  /**
-   * Logout do console. E escrita autenticada por cookie, entao exige o token
-   * anti-CSRF: sem ele, qualquer site poderia derrubar a sessao de quem o
-   * visitasse. Sem sessao, nao ha o que encerrar e a resposta e a mesma.
-   */
   async endSession(req: Request, res: Response): Promise<void> {
     const cookie = this.cookies.get<SsoSessionCookie>(req, SSO_SESSION_COOKIE);
 
@@ -910,11 +744,6 @@ export class AuthService {
     return crypto.randomBytes(bytes).toString('base64url');
   }
 
-  /**
-   * O retorno do Google e uma navegacao cross-site, e SameSite=Strict nao
-   * acompanharia esse salto: o callback chegaria sem transacao. Por isso o
-   * cookie de transacao e sempre lax, qualquer que seja a configuracao.
-   */
   private storeTransaction(res: Response, transaction: LoginTransaction): void {
     this.cookies.set(res, SSO_TX_COOKIE, transaction, TX_COOKIE_TTL_SECONDS, {
       sameSite: 'lax',
@@ -936,10 +765,6 @@ export class AuthService {
     return session;
   }
 
-  /**
-   * Volta ao console. Quem nao tem papel no projeto `SSO` volta com
-   * `access_denied`, como no authorize: a sessao existe, mas nao abre o console.
-   */
   private async finishSessionLogin(
     res: Response,
     userId: string,
@@ -1001,8 +826,6 @@ export class AuthService {
 
     target.searchParams.set('code', code);
     target.searchParams.set('state', transaction.state);
-    // RFC 9207: diz ao cliente qual AS respondeu. E a defesa contra mix-up
-    // recomendada pela RFC 9700 secao 2.1 para quem fala com mais de um AS.
     target.searchParams.set('iss', this.issuer);
 
     this.logger.log(

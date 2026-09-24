@@ -72,6 +72,14 @@ credenciais de operador do SSO alvo, que a aplicação recebe no **próprio** `.
 Nada além disso. A aplicação nova tem o próprio `docker-compose.yml`, não compartilha banco e não
 precisa que o `krloc-api-v1` exista.
 
+### Código em inglês, sem comentário
+
+Nome de variável, função, tipo, constante e arquivo em **inglês**, nos seis repositórios, e o código
+**não leva comentário**. O que explica uma decisão mora no `CLAUDE.md` do repositório, onde quem
+chega procura primeiro e onde a explicação não envelhece escondida ao lado de uma linha que mudou.
+Ficam de fora só as diretivas que a ferramenta lê, como `eslint-disable` e `// no default`, e o texto
+de tela, que vive nos JSON de tradução.
+
 ### Erro sai com código
 
 Toda API do ecossistema responde erro com um código estável no campo `error`, e o front escolhe o

@@ -4,11 +4,6 @@ import { ApiException } from '../error/apiError';
 
 const logger = new Logger('CurrentAdmin');
 
-/**
- * Injeta no handler quem esta agindo. So existe depois que o `SSOAdminGuard`
- * resolveu o token, entao usar em rota `@Public()` e erro de programacao e
- * falha alto em vez de entregar `undefined`.
- */
 export const CurrentAdmin = createParamDecorator(
   (_data: unknown, context: ExecutionContext): AdminIdentity => {
     const request = context.switchToHttp().getRequest<RequestWithAdmin>();

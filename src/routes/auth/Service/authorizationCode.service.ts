@@ -21,21 +21,8 @@ export interface ConsumedCode {
   codeChallengeMethod: string;
 }
 
-/**
- * Authorization code em Postgres, nao em Redis.
- *
- * Nao da para mover este estado para cookie: quem apresenta o code no token
- * endpoint e o backend do RP, numa requisicao que nao carrega cookie nenhum
- * do navegador do usuario. E o uso unico exigido pela RFC 6749 secao 4.1.2
- * precisa de estado compartilhado de qualquer forma.
- *
- * O consumo e um UPDATE condicional dentro de transacao, entao duas trocas
- * simultaneas do mesmo code nao passam as duas. A implementacao anterior lia
- * e apagava em chamadas separadas, o que deixava a corrida aberta.
- */
 @Injectable()
 export class AuthorizationCodeService {
-  /** Bem abaixo do teto de 10 minutos sugerido pela RFC 6749 secao 4.1.2. */
   private static readonly TTL_SECONDS = 60;
   private static readonly CODE_BYTES = 32;
 
@@ -69,9 +56,6 @@ export class AuthorizationCodeService {
   async consume(raw: string): Promise<ConsumedCode> {
     const codeHash = this.hash(raw);
 
-    // A transacao decide o que aconteceu, mas nao lanca nada: lancar aqui
-    // dispararia rollback e desfaria a propria revogacao de seguranca. Por
-    // isso o efeito colateral e a excecao ficam do lado de fora.
     const outcome = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.authorizationCode.findUnique({
         where: { codeHash },
@@ -87,8 +71,6 @@ export class AuthorizationCodeService {
         return { kind: 'expired' as const };
       }
 
-      // Uso unico: so passa quem realmente virou a linha de nao-consumida
-      // para consumida.
       const claimed = await tx.authorizationCode.updateMany({
         where: { codeHash, consumedAt: null },
         data: { consumedAt: new Date() },
@@ -111,8 +93,6 @@ export class AuthorizationCodeService {
     }
 
     if (outcome.kind === 'replayed') {
-      // RFC 9700 secao 2.1.1: reapresentacao e tratada como ataque, e tudo
-      // que foi emitido a partir daquele code cai junto.
       const revoked = await this.prisma.refreshToken.updateMany({
         where: {
           authSessionId: outcome.row.authSessionId,
@@ -144,11 +124,6 @@ export class AuthorizationCodeService {
     };
   }
 
-  /**
-   * Verificacao PKCE (RFC 7636 secao 4.6).
-   * Comparacao em tempo constante: o desafio nao e segredo, mas comparar
-   * hashes assim e barato e evita canal lateral por tempo.
-   */
   verifyChallenge(codeVerifier: string, expectedChallenge: string): boolean {
     const computed = crypto
       .createHash('sha256')
@@ -161,7 +136,6 @@ export class AuthorizationCodeService {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 
-  /** Housekeeping: linhas expiradas nao servem mais nem para auditoria. */
   async purgeExpired(): Promise<number> {
     const { count } = await this.prisma.authorizationCode.deleteMany({
       where: { expiresAt: { lt: new Date(Date.now() - 60 * 60 * 1000) } },

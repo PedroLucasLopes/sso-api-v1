@@ -92,47 +92,22 @@ export class UserService {
     return editUser;
   }
 
-  /**
-   * Apaga a pessoa, e com ela o rastro do login dela.
-   *
-   * O vinculo com projeto continua barrando: tirar alguem de um projeto e
-   * decisao de quem administra aquele projeto, e some da lista de membros dele.
-   * O que sobra depois que ela nao tem mais nenhum nao e acesso, e rastro: a
-   * sessao dela com o SSO, os refresh tokens e os authorization codes. Nada
-   * disso a deixava entrar em lugar nenhum, e mesmo assim impedia a exclusao,
-   * porque a chave estrangeira de `AuthSession` recusava apagar o `User` e a
-   * resposta virava 500.
-   *
-   * Agora sai tudo na mesma transacao, e apagar vale como revogar cada grant
-   * (RFC 7009 secao 2.1): nenhuma aplicacao renova mais nada para ela, e a
-   * sessao no proprio SSO morre junto. O access token ja emitido continua
-   * verificando ate expirar, como sempre (RFC 10017 secao 6.2.4); sao 15
-   * minutos, e quem chega aqui ja nao tinha papel em projeto nenhum.
-   *
-   * A linha da pessoa e as sessoes dela ficam travadas durante a conferencia.
-   * Vincular alguem a um projeto e emitir refresh token conferem a chave
-   * estrangeira contra essas linhas, entao o que comecar no meio espera a
-   * transacao terminar e falha, em vez de ressuscitar parte do cadastro.
-   */
   async deleteUser(id: string): Promise<void> {
-    /* A decisao sai da transacao como resultado, e a excecao acontece fora:
-     * lancar aqui dentro dispararia rollback, que e a armadilha ja paga na
-     * revogacao por reuso de token. */
     const outcome = await this.prisma.$transaction(async (tx) => {
-      const travada = await tx.$queryRaw<
+      const locked = await tx.$queryRaw<
         { id: string }[]
       >`SELECT id FROM "User" WHERE id = ${id} FOR UPDATE`;
 
-      if (travada.length === 0) return 'not_found' as const;
+      if (locked.length === 0) return 'not_found' as const;
 
-      const vinculos = await tx.projectUser.count({ where: { userId: id } });
+      const memberships = await tx.projectUser.count({ where: { userId: id } });
 
-      if (vinculos > 0) return 'has_projects' as const;
+      if (memberships > 0) return 'has_projects' as const;
 
-      const sessoes = await tx.$queryRaw<
+      const sessions = await tx.$queryRaw<
         { id: string }[]
       >`SELECT id FROM "AuthSession" WHERE "userId" = ${id} FOR UPDATE`;
-      const sessionIds = sessoes.map((sessao) => sessao.id);
+      const sessionIds = sessions.map((session) => session.id);
 
       await tx.authorizationCode.deleteMany({
         where: { OR: [{ userId: id }, { authSessionId: { in: sessionIds } }] },

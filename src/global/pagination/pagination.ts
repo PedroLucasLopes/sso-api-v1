@@ -5,12 +5,6 @@ type PaginationType = {
   limit: number;
 };
 
-/**
- * Teto do `limit`. Sem ele, `?limit=1000000` numa rota de catalogo devolve o
- * banco inteiro numa resposta so: e varredura de dados e e negacao de servico
- * pelo mesmo pedido. O piso continua 10, e 500 e o que as telas de apoio do
- * console pedem de uma vez (LOOKUP_LIMIT).
- */
 export const MAX_LIMIT = 500;
 
 export const PaginationConfig = (

@@ -20,11 +20,6 @@ import { CurrentAdmin } from 'src/global/decorator/currentAdmin.decorator';
 export class RedirectUriController {
   constructor(private redirectUriService: RedirectUriService) {}
 
-  /**
-   * O corpo e tipado pelo DTO, e nao pelo model do Prisma. Com o model, o
-   * ValidationPipe nao tinha classe para validar e deixava passar qualquer
-   * coisa, inclusive campo a mais.
-   */
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async createRedirectUri(
@@ -44,10 +39,6 @@ export class RedirectUriController {
     return await this.redirectUriService.updateRedirectUri(id, data, admin);
   }
 
-  /**
-   * O `Origin` so pesa no projeto do proprio SSO: e por ele que o servidor sabe
-   * que o console esta tentando apagar o endereco pelo qual ele mesmo entra.
-   */
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteRedirectUri(

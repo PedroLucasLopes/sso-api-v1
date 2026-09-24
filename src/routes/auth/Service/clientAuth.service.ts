@@ -7,33 +7,14 @@ import { PrismaService } from 'src/global/prisma/prisma.service';
 import { CLIENT_ASSERTION_TYPE } from '../dto/token.dto';
 import { OAuthException } from '../error/oauth.exception';
 
-/**
- * O minimo que um corpo precisa ter para autenticar o cliente. Token endpoint
- * e revocation endpoint compartilham este contrato (RFC 7009 secao 2.1 manda
- * o revoke usar a mesma autenticacao do token).
- */
 export interface ClientAuthenticatable {
   client_id?: string;
   client_assertion_type?: string;
   client_assertion?: string;
 }
 
-/**
- * Autenticacao do cliente no token endpoint via `private_key_jwt`
- * (RFC 7523 secao 2.2).
- *
- * As aplicacoes clientes sao backends registrados aqui, nao paginas: quem
- * troca o code por token e o servidor delas. A RFC 10017 secao 6.2.3.1 diz
- * que um token-mediating backend MUST agir como cliente confidencial, entao
- * PKCE sozinho nao basta.
- *
- * A escolha por asserção assinada em vez de client_secret evita reintroduzir
- * um segredo compartilhado, que e exatamente o problema que a migracao para
- * RS256 esta removendo. O SSO guarda so a chave publica do cliente.
- */
 @Injectable()
 export class ClientAuthService {
-  /** A RFC 7523 secao 3 manda recusar `exp` distante demais no futuro. */
   private static readonly MAX_ASSERTION_LIFETIME_SECONDS = 300;
 
   private readonly logger = new Logger(ClientAuthService.name);
@@ -84,9 +65,6 @@ export class ClientAuthService {
       throw OAuthException.invalidClient('client_id desconhecido');
     }
 
-    // Mesma trava do authorize endpoint, repetida aqui de proposito: o token
-    // endpoint e alcancavel diretamente, sem passar pelo authorize. Suspender
-    // um projeto precisa cortar tambem a renovacao por refresh token.
     if (project.status !== ProjectStatus.ACTIVE) {
       this.logger.warn(
         `token recusado: projeto ${project.name} esta ${project.status}`,
@@ -112,10 +90,6 @@ export class ClientAuthService {
     return project;
   }
 
-  /**
-   * Le `iss` sem verificar assinatura, apenas para localizar as chaves.
-   * Nada deste passo e confiavel ate a verificacao acontecer.
-   */
   private readClientIdFromAssertion(assertion: string): string {
     const decoded = this.jwt.decode<{
       iss?: unknown;
@@ -129,7 +103,6 @@ export class ClientAuthService {
       throw OAuthException.invalidClient('asserção sem claim iss');
     }
 
-    // RFC 7523 secao 3: para autenticacao de cliente, iss e sub sao o client_id.
     if (sub !== iss) {
       throw OAuthException.invalidClient('asserção com iss diferente de sub');
     }
@@ -149,9 +122,6 @@ export class ClientAuthService {
           algorithms: ['RS256'],
           issuer: clientId,
           subject: clientId,
-          // `aud` deve nomear o AS. Aceito o token endpoint e o issuer:
-          // a RFC 7523 secao 3 permite as duas leituras e implementacoes
-          // reais divergem sobre qual usar.
           audience: [this.tokenEndpoint, this.issuer],
         });
 
@@ -166,8 +136,6 @@ export class ClientAuthService {
         return;
       } catch (error) {
         if (error instanceof OAuthException) throw error;
-        // Chave errada e esperado quando o cliente tem mais de uma
-        // registrada: seguimos tentando as demais.
         continue;
       }
     }
