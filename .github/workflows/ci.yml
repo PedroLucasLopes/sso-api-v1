@@ -1,14 +1,20 @@
 # Integracao e entrega continuas do sso-api-v1.
 #
-# CI, em pull request e em push na main: instalacao limpa, auditoria das
-# dependencias, lint, compilacao e testes de unidade. No pull request a imagem
-# tambem e montada, sem publicar.
+# CI, em pull request para a development e para a main, e em push nas duas:
+# instalacao limpa, auditoria das dependencias, lint, compilacao e testes de
+# unidade. No pull request e na development a imagem tambem e montada, sem
+# publicar.
 #
 # CD, em push na main, em tag v* e a mao: as imagens do SSO e da migration vao
 # para o GitHub Container Registry, com a tag do commit, `main` e a versao.
 #
 # O teste do fluxo OAuth (`npm run test:oauth`) roda contra o SSO de pe, com o
 # banco do ambiente: roda na maquina de quem desenvolve, nao aqui.
+#
+# O trabalho nasce numa branch feat/*, fix/* ou bugfix/*, vai por pull request
+# para a development e so chega na main por um segundo pull request, revisado a
+# mao. Publicar imagem e coisa da main: na development o pipeline monta a imagem
+# e joga fora, para provar que o Dockerfile continua de pe.
 #
 # O pipeline tambem e superficie de ataque: cada action e fixada por commit, e
 # nao por tag, que pode ser movida; cada job recebe so a permissao que usa; e o
@@ -17,10 +23,10 @@ name: CI/CD
 
 on:
   push:
-    branches: [main]
+    branches: [main, development]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [main, development]
   workflow_dispatch:
 
 permissions: {}
@@ -70,7 +76,7 @@ jobs:
 
   image:
     name: Imagem, sem publicar
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/development'
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -93,7 +99,7 @@ jobs:
 
   publish:
     name: Publicar imagens
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref != 'refs/heads/development'
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 30

@@ -71,6 +71,10 @@ quando quebra no meio. Precisa do SQL de primeira subida aplicado e de mais nenh
 
 ## 🚀 CI/CD
 
+**O trabalho nasce numa branch `feat/*`, `fix/*` ou `bugfix/*`, vai por pull request para a `development`
+e só chega na `main` por um segundo pull request, revisado à mão.** As duas branches exigem pipeline verde
+e recusam push direto. O fluxo inteiro está em [`docs/ecossistema.md`](docs/ecossistema.md).
+
 `.github/workflows/ci.yml`, no GitHub Actions:
 
 | Quando | O que roda |

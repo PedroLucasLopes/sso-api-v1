@@ -233,11 +233,35 @@ estar no banco porque um dump permitiria personificar toda aplicação registrad
 
 ---
 
+## 🌿 Branches
+
+Um fluxo só, nos seis repositórios:
+
+```
+feat/nome-da-feature  →  PR  →  development  →  PR  →  main  →  deploy
+```
+
+| Branch | O que é |
+|---|---|
+| `main` | o que está em produção. Só recebe merge de `development`, por pull request revisado a mão. Push na `main` publica imagem |
+| `development` | onde o trabalho revisado se junta. Branch padrão dos repositórios: pull request novo já nasce apontando para ela |
+| `feat/*` | funcionalidade nova. Nasce da `development` |
+| `fix/*` · `bugfix/*` | correção. Nasce da `development`; se for incêndio em produção, da `main` |
+
+- **Nada entra por push direto.** As duas branches exigem pull request, com a pipeline verde, e recusam
+  force-push e exclusão.
+- **A pipeline roda igual nos dois lados**, e na `development` ela monta a imagem e joga fora: o
+  Dockerfile é conferido antes de virar deploy, não depois.
+- **Publicar é da `main`.** Imagem por push na `main` e tag `v*`; pacote das bibliotecas, só por tag.
+- **A tag `pre-squash`**, nos seis repositórios, guarda o histórico anterior ao commit único da 1.0.0.
+
+---
+
 ## 🚀 CI/CD
 
 Cada repositório tem o próprio pipeline no GitHub Actions, e nenhum depende de outro para rodar.
 
-| Repositório | CI, em pull request e push na `main` | CD |
+| Repositório | CI, em pull request e push na `development` e na `main` | CD |
 |---|---|---|
 | `sso-api-v1`, `krloc-api-v1` | `npm audit`, lint, build, testes de unidade; no pull request, a imagem sem publicar | imagens da API e da migration no GitHub Container Registry, por push na `main` e tag `v*` |
 | `plataforma_sso-v1`, `plataforma_krloc-v1` | `npm audit`, lint, build com type-check e traduções; no pull request, a imagem sem publicar | imagem do nginx com o build no GitHub Container Registry |
