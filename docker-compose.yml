@@ -1,0 +1,53 @@
+name: sso-api-v1
+
+# O Authorization Server sozinho. Cada aplicacao do ecossistema tem o proprio
+# compose, no proprio repositorio, e alcanca este servico pelo endereco da
+# maquina, http://host.docker.internal:8080. Nao ha rede compartilhada nem ordem
+# de subida entre repositorios.
+#
+# NAO ha servico de Postgres: o container fala com o Postgres NATIVO da maquina,
+# por host.docker.internal. A configuracao mora em .env.docker (modelo em
+# .env.example). A porta do host muda com SSO_PORT.
+#
+# Migration roda em servico separado de proposito: migrar no boot gera corrida
+# entre replicas assim que houver mais de uma instancia.
+
+x-host: &host
+  # `host.docker.internal` e o alias do host. O Docker Desktop ja o fornece; a
+  # linha abaixo mantem o arquivo portatil para Docker Engine no Linux.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  sso-migrate:
+    <<: *host
+    build:
+      context: .
+      target: migrate
+    restart: "no"
+    env_file:
+      - ./.env.docker
+
+  sso:
+    <<: *host
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    env_file:
+      - ./.env.docker
+    environment:
+      # So o que depende da execucao em container, nao da aplicacao.
+      NODE_ENV: production
+      PORT: 8080
+    ports:
+      - "${SSO_PORT:-8080}:8080"
+    depends_on:
+      sso-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/sso/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
