@@ -1,7 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SealedKey } from './dto/sealedKey.dto';
-import { openParts, readKey, sealParts } from './aead';
+import {
+  openCompact,
+  openParts,
+  readKey,
+  sealCompact,
+  sealParts,
+} from './aead';
 import { ApiException } from '../error/apiError';
 
 @Injectable()
@@ -29,5 +35,22 @@ export class KeyEncryptionService {
       );
       throw new ApiException('internal_error');
     }
+  }
+
+  sealToken(plaintext: string): string {
+    return sealCompact(this.kek, plaintext);
+  }
+
+  openToken(token: string): string {
+    const plaintext = openCompact(this.kek, token);
+
+    if (plaintext === null) {
+      this.logger.error(
+        'Falha ao decifrar um segredo guardado. Verifique KEY_ENCRYPTION_KEY.',
+      );
+      throw new ApiException('internal_error');
+    }
+
+    return plaintext;
   }
 }
