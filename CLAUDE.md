@@ -301,6 +301,77 @@ decide pelo papel de até 15 minutos atrás. A introspecção devolve os dois li
 
 ---
 
+## 🔑 Entrar com senha, e o segundo fator
+
+O login federado ao Google continua, e ao lado dele há **e-mail e senha emitidas pelo SSO**. Ninguém
+cria conta nem senha por conta própria: a linha de `User` nasce no console, e a de `UserPassword`
+nasce quando um administrador emite. Os dois caminhos terminam no mesmo lugar, e **os dois exigem o
+segundo fator por aplicativo**.
+
+```
+e-mail e senha ─┐                        ┌─ trocar a senha (primeiro acesso)
+                ├─► primeiro fator ──────┤
+Google ─────────┘                        ├─ cadastrar o segundo fator (primeiro acesso)
+                                         └─ código de seis dígitos
+                                                     │
+                                            sessão + authorization code
+```
+
+- **A senha é coletada pela tela do IdP**, na origem do SSO, nunca pela aplicação. O grant de senha do
+  OAuth (ROPC) não existe aqui, e é justamente o que a RFC 9700 §2.4 manda não usar.
+- **A senha nasce no console** (`POST /sso/user/:id/password`), aparece **uma única vez** na resposta,
+  com `Cache-Control: no-store`, e nasce com `mustChange`. No primeiro acesso a pessoa define a dela,
+  e a partir daí ninguém mais a conhece. O mesmo padrão da chave de cliente.
+- **Guardada com scrypt** (`N=2¹⁶, r=8, p=1`, sal de 16 bytes), do `node:crypto`: sem dependência
+  nova, sem binário nativo, e o parâmetro fica gravado junto do hash, para poder subir depois.
+- **Não há enumeração de conta.** E-mail que não existe e senha errada devolvem o mesmo
+  `invalid_credentials`, e o caminho sem conta ainda paga um hash falso, para não responder na hora.
+- **Cinco tentativas erradas bloqueiam por 15 minutos** (`account_locked`), contadas no banco, por
+  conta — além do limite por origem do throttler, que é por IP.
+- **O segundo fator é TOTP** (RFC 6238, seis dígitos, passo de 30 s, janela de ±1), compatível com
+  Google Authenticator e qualquer outro. A pessoa cadastra no primeiro acesso: o QR aparece na tela
+  dela, e o segredo não passa pelo administrador.
+- **O segredo do TOTP fica cifrado** com a mesma `KEY_ENCRYPTION_KEY` que protege as chaves de
+  assinatura: um dump do banco não gera código.
+- **Código usado não vale duas vezes** (`lastStep`), e há oito **códigos de recuperação**, guardados
+  em hash, de uso único, mostrados uma vez no fim do cadastro.
+- **Perdeu o aplicativo:** o administrador reseta em `DELETE /sso/user/:id/mfa` e a pessoa cadastra
+  de novo no acesso seguinte. **Perdeu a senha:** emitir outra, que nasce com `mustChange` de novo.
+
+### As etapas, por dentro
+
+Entre o primeiro fator e a sessão existe um **cookie de etapa** (`sso_step`, cifrado, 5 minutos), que
+guarda quem passou pelo primeiro fator e em que etapa está. A transação do pedido (`sso_tx`) continua
+exigida em toda etapa: sem pedido pendente, nenhuma delas responde. A sessão só nasce no fim, em
+`completeLogin`, que é o mesmo caminho do retorno do Google.
+
+| Rota | Etapa |
+|---|---|
+| `POST /sso/login/password` | e-mail e senha; devolve a próxima etapa |
+| `POST /sso/login/password/change` | troca obrigatória do primeiro acesso |
+| `POST /sso/login/mfa/setup` | começa o cadastro: devolve segredo e `otpauth://` |
+| `POST /sso/login/mfa/confirm` | confirma com o código e devolve os códigos de recuperação |
+| `POST /sso/login/mfa` | o código de quem já cadastrou; aceita código de recuperação |
+| `GET /sso/login/request` | o pedido pendente e **em que etapa a pessoa está** |
+
+Nenhuma delas devolve redirect: a tela recebe `{ next, redirectTo }` e navega. Quem não tem papel no
+projeto recebe `next: "done"` com o `redirect_uri` carregando `error=access_denied`, o mesmo que o
+caminho do Google entrega.
+
+### Rotas administrativas da credencial
+
+| Rota | O que faz |
+|---|---|
+| `GET /sso/user/:id/credential` | se há senha emitida, se falta trocar, até quando está bloqueada, se o segundo fator está cadastrado e quantos códigos de recuperação restam |
+| `POST /sso/user/:id/password` | emite a senha e a devolve uma vez |
+| `DELETE /sso/user/:id/password` | tira o login por senha daquela conta |
+| `DELETE /sso/user/:id/mfa` | reseta o segundo fator |
+
+Como toda rota administrativa nova, a raiz as alcança no mesmo deploy; os papéis de gestão, depois de
+cadastradas no catálogo do projeto `SSO` e concedidas.
+
+---
+
 ## 🛡️ Autorização das rotas administrativas
 
 **O SSO é um `Project` de si mesmo.** O console administrativo entra pelo mesmo fluxo OAuth que o
@@ -427,11 +498,14 @@ as outras aplicações.
 | GET | `/sso/oauth/authorize` · `/sso/oauth/google` · `/sso/oauth/google/callback` | público |
 | POST | `/sso/oauth/token` · `/sso/oauth/revoke` · `/sso/oauth/permissions` · `/sso/oauth/introspect` | público, exige `private_key_jwt` |
 | POST | `/sso/oauth/logout` | público |
-| GET | `/sso/login/request` | público, o pedido pendente que a tela de login atende |
+| GET | `/sso/login/request` | público, o pedido pendente e a etapa em que a pessoa está |
+| POST | `/sso/login/password` · `/sso/login/password/change` | público, com pedido pendente: primeiro fator e troca no primeiro acesso |
+| POST | `/sso/login/mfa/setup` · `/sso/login/mfa/confirm` · `/sso/login/mfa` | público, com etapa aberta: cadastro e conferência do segundo fator |
 | GET | `/sso/session` · `/sso/session/login` | público: estado da sessão e login do console |
 | POST | `/sso/session/logout` | público, exige `X-CSRF-Token` |
 | GET | `/sso/me` | autenticado, sem RBAC; devolve o `csrfToken` para quem veio pela sessão |
 | GET POST | `/sso/user` · `/sso/project` · `/sso/route` · `/sso/role` | catálogo |
+| GET · POST DELETE | `/sso/user/:id/credential` · `/sso/user/:id/password` · `/sso/user/:id/mfa` | catálogo: emitir senha, revogar e resetar o segundo fator |
 | GET PUT DELETE | `/sso/user/:id` · `/sso/project/:id` · `/sso/route/:id` · `/sso/role/:id` | catálogo |
 | GET · PATCH | `/sso/project/:id/overview` · `/sso/project/:id/status` | catálogo |
 | POST · DELETE | `/sso/permission` · `/sso/permission/:id` | catálogo |
@@ -658,6 +732,13 @@ por teste em `test/oauth-e2e.js`.
   novo nasce do SQL de primeira subida, que fica fora dele.
 - Nenhum segredo de administração volta para o ambiente.
 - A tela de login só oferece provedor com pedido pendente, e erro para ela vai como código.
+- Senha nunca é coletada pela aplicação, só pela tela do IdP. O grant de senha do OAuth não volta.
+- Senha emitida aparece uma vez, nasce com `mustChange` e some do servidor em hash de scrypt. Conta
+  nova não ganha senha sozinha, e ninguém se cadastra.
+- E-mail desconhecido e senha errada respondem o mesmo `invalid_credentials`, e o caminho sem conta
+  paga o mesmo tempo de hash.
+- O segundo fator é exigido nos dois caminhos, Google inclusive, e o segredo dele fica cifrado com
+  `KEY_ENCRYPTION_KEY`. Código usado não vale de novo.
 - Escrita administrativa pela sessão exige `X-CSRF-Token` e origem do console. Não afrouxe.
 - Nada aqui lê arquivo de outro repositório.
 - O projeto `SSO` não se apaga, não se renomeia e não sai de `ACTIVE`; o catálogo, os membros, as

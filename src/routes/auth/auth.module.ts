@@ -11,7 +11,10 @@ import { AuthService } from './Service/auth.service';
 import { AuthSessionService } from './Service/authSession.service';
 import { AuthorizationCodeService } from './Service/authorizationCode.service';
 import { ClientAuthService } from './Service/clientAuth.service';
+import { CredentialService } from './Service/credential.service';
+import { LoginFlowService } from './Service/loginFlow.service';
 import { LoginPageService } from './Service/loginPage.service';
+import { LoginStepService } from './Service/loginStep.service';
 import { PermissionSetService } from './Service/permissionSet.service';
 import { RefreshTokenService } from './Service/refreshToken.service';
 import { TokenIssuerService } from './Service/tokenIssuer.service';
@@ -35,8 +38,11 @@ import { GoogleStrategy } from './strategy/google.strategy';
     TokenIssuerService,
     ClientAuthService,
     LoginPageService,
+    LoginStepService,
+    LoginFlowService,
+    CredentialService,
     GoogleStrategy,
   ],
-  exports: [AuthSessionService, RefreshTokenService],
+  exports: [AuthSessionService, RefreshTokenService, CredentialService],
 })
 export class AuthModule {}
