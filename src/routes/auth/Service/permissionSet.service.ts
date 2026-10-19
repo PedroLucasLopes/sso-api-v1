@@ -19,7 +19,7 @@ export class PermissionSetService {
     }
 
     const permissions = found.permissions
-      .map((p) => ({ path: p.route.path, method: p.route.method as string }))
+      .map((p) => ({ path: p.route.path, method: p.route.method }))
       .sort((a, b) =>
         a.path === b.path
           ? a.method.localeCompare(b.method)
