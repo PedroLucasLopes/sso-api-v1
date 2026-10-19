@@ -9,14 +9,15 @@ datasource db {
 }
 
 model User {
-  id           String        @id @default(uuid())
-  email        String        @unique
-  name         String
-  authId       String?       @unique
-  authSessions AuthSession[]
-  projectUsers ProjectUser[]
-  password     UserPassword?
-  mfa          UserMfa?
+  id            String         @id @default(uuid())
+  email         String         @unique
+  name          String
+  authId        String?        @unique
+  authSessions  AuthSession[]
+  projectUsers  ProjectUser[]
+  password      UserPassword?
+  mfa           UserMfa?
+  accountEmails AccountEmail[]
 }
 
 /// Uma aplicacao cliente.
@@ -26,18 +27,25 @@ model User {
 /// banco nao basta. Suspender corta o acesso da aplicacao inteira na hora, sem
 /// precisar apagar cadastro nem revogar chave uma a uma.
 model Project {
-  id           String        @id @default(uuid())
-  name         String        @unique
-  clientId     String        @unique
-  status       ProjectStatus @default(PENDING)
-  createdAt    DateTime      @default(now())
-  activatedAt  DateTime?
-  suspendedAt  DateTime?
-  clientKeys   ClientKey[]
-  projectUsers ProjectUser[]
-  redirectUris redirectUri[]
-  roles        Role[]
-  routes       Route[]
+  id            String         @id @default(uuid())
+  name          String         @unique
+  clientId      String         @unique
+  status        ProjectStatus  @default(PENDING)
+  signupPolicy  SignupPolicy   @default(CLOSED)
+  mfaPolicy     MfaPolicy      @default(REQUIRED)
+  defaultRoleId String?
+  displayName   String?
+  logo          String?
+  createdAt     DateTime       @default(now())
+  activatedAt   DateTime?
+  suspendedAt   DateTime?
+  clientKeys    ClientKey[]
+  projectUsers  ProjectUser[]
+  redirectUris  redirectUri[]
+  roles         Role[]         @relation("ProjectRoles")
+  routes        Route[]
+  defaultRole   Role?          @relation("ProjectDefaultRole", fields: [defaultRoleId], references: [id], onDelete: SetNull)
+  accountEmails AccountEmail[]
 
   @@index([status])
 }
@@ -76,7 +84,8 @@ model Role {
   projectId    String
   permissions  Permission[]
   projectUsers ProjectUser[]
-  project      Project       @relation(fields: [projectId], references: [id])
+  project      Project       @relation("ProjectRoles", fields: [projectId], references: [id])
+  defaultFor   Project[]     @relation("ProjectDefaultRole")
 
   @@unique([name, projectId])
   @@index([projectId])
@@ -147,6 +156,7 @@ model AuthSession {
   revokedAt     DateTime?
   createdAt     DateTime       @default(now())
   lastSeenAt    DateTime       @default(now())
+  singleFactor  Boolean        @default(false)
   user          User           @relation(fields: [userId], references: [id])
   refreshTokens RefreshToken[]
 
@@ -218,6 +228,43 @@ enum Method {
   UPDATE
   PUT
   PATCH
+}
+
+enum SignupPolicy {
+  CLOSED
+  OPEN
+}
+
+enum MfaPolicy {
+  REQUIRED
+  OPTIONAL
+}
+
+enum AccountEmailKind {
+  SIGNUP
+  PASSWORD_RESET
+  ACCOUNT_EXISTS
+  PASSWORD_CHANGED
+}
+
+model AccountEmail {
+  id          String           @id @default(uuid())
+  kind        AccountEmailKind
+  email       String
+  userId      String?
+  projectId   String
+  redirectUri String
+  locale      String
+  tokenHash   String?          @unique
+  expiresAt   DateTime?
+  consumedAt  DateTime?
+  createdAt   DateTime         @default(now())
+  user        User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([email, createdAt])
+  @@index([userId])
+  @@index([projectId])
 }
 
 /// Senha emitida pelo SSO para uma pessoa. Nao ha cadastro por conta propria: a

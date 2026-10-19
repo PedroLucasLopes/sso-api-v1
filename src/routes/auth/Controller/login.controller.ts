@@ -8,12 +8,21 @@ import {
   Post,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { Public } from 'src/global/decorator/public.decorator';
+import {
+  HumanCheckGuard,
+  RequireHuman,
+} from 'src/global/security/humanCheck.guard';
+import { SameOriginGuard } from 'src/global/security/sameOrigin.guard';
+import { ACCOUNT_REQUEST_LIMIT } from '../account.constant';
+import { AccountService } from '../Service/account.service';
 import { AuthService } from '../Service/auth.service';
 import { LoginFlowService } from '../Service/loginFlow.service';
+import { AccountEmailRequest } from '../dto/account.dto';
 import { LoginRequestView } from '../dto/loginRequest.dto';
 import {
   LoginStepView,
@@ -30,12 +39,39 @@ export class LoginController {
   constructor(
     private authService: AuthService,
     private loginFlow: LoginFlowService,
+    private accounts: AccountService,
   ) {}
 
   @Get('request')
   @Header('Cache-Control', 'no-store')
-  request(@Req() req: Request): LoginRequestView {
+  async request(@Req() req: Request): Promise<LoginRequestView> {
     return this.authService.pendingRequest(req);
+  }
+
+  @Post('signup')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Header('Cache-Control', 'no-store')
+  @Throttle(ACCOUNT_REQUEST_LIMIT)
+  @RequireHuman('signup')
+  @UseGuards(SameOriginGuard, HumanCheckGuard)
+  async signup(
+    @Req() req: Request,
+    @Body() body: AccountEmailRequest,
+  ): Promise<LoginStepView> {
+    return this.accounts.requestSignup(req, body);
+  }
+
+  @Post('password/reset')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Header('Cache-Control', 'no-store')
+  @Throttle(ACCOUNT_REQUEST_LIMIT)
+  @RequireHuman('password_reset')
+  @UseGuards(SameOriginGuard, HumanCheckGuard)
+  async passwordReset(
+    @Req() req: Request,
+    @Body() body: AccountEmailRequest,
+  ): Promise<LoginStepView> {
+    return this.accounts.requestPasswordReset(req, body);
   }
 
   @Post('password')

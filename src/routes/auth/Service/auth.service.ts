@@ -7,11 +7,19 @@ import {
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'node:crypto';
 import { Request, Response } from 'express';
-import { Project } from 'generated/prisma/client';
+import { AuthSession, Project } from 'generated/prisma/client';
 import { ProjectStatus } from 'generated/prisma/enums';
 import { PrismaService } from 'src/global/prisma/prisma.service';
 import { CookieService } from 'src/global/cookie/cookie.service';
 import { SSO_SELF_PROJECT_NAME } from 'src/global/constants/selfProject.constant';
+import {
+  acceptsSignup,
+  PROJECT_ACCESS_POLICY_FIELDS,
+  ProjectAccessPolicy,
+} from 'src/global/access/projectPolicy';
+import { ApiException } from 'src/global/error/apiError';
+import { MailerService } from 'src/global/mail/mailer.service';
+import { HumanCheckService } from 'src/global/security/humanCheck.service';
 import {
   SSO_CSRF_HEADER,
   SSO_SESSION_COOKIE,
@@ -47,8 +55,15 @@ import { AuthorizationCodeService } from './authorizationCode.service';
 import { ClientAuthService } from './clientAuth.service';
 import { LoginPageService } from './loginPage.service';
 import { LoginStepService } from './loginStep.service';
+import { ProjectEntryService } from './projectEntry.service';
 import { RefreshTokenService } from './refreshToken.service';
 import { TokenIssuerService } from './tokenIssuer.service';
+
+export interface SessionOptions {
+  singleFactor: boolean;
+  upgradeSessionId?: string;
+  replacesSessionId?: string;
+}
 
 @Injectable()
 export class AuthService {
@@ -68,6 +83,9 @@ export class AuthService {
     private signingKeys: SigningKeyService,
     private loginPage: LoginPageService,
     private steps: LoginStepService,
+    private entries: ProjectEntryService,
+    private mailer: MailerService,
+    private humanCheck: HumanCheckService,
     config: ConfigService,
   ) {
     this.issuer = config.getOrThrow<string>('SSO_ISSUER').replace(/\/+$/, '');
@@ -157,6 +175,9 @@ export class AuthService {
 
     if (session) {
       await this.authSessions.touch(session.id);
+
+      if (await this.stepUp(res, session, transaction, project)) return;
+
       await this.issueCodeAndRedirect(
         res,
         session.id,
@@ -229,12 +250,52 @@ export class AuthService {
 
     if (session) {
       await this.authSessions.touch(session.id);
+
+      if (await this.stepUp(res, session, transaction, project)) return;
+
       await this.finishSessionLogin(res, session.userId, transaction);
       return;
     }
 
     this.storeTransaction(res, transaction);
     res.redirect(this.loginPage.url());
+  }
+
+  private async stepUp(
+    res: Response,
+    session: AuthSession,
+    transaction: LoginTransaction,
+    project: ProjectAccessPolicy,
+  ): Promise<boolean> {
+    if (!session.singleFactor) return false;
+
+    const entry = await this.entries.assess(session.userId, project);
+
+    if (!entry.roleId || !entry.secondFactorRequired) return false;
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: session.userId },
+      select: { email: true },
+    });
+
+    this.storeTransaction(res, transaction);
+
+    if (user) {
+      this.steps.open(res, {
+        userId: session.userId,
+        email: user.email,
+        stage: await this.steps.secondFactorStage(session.userId),
+        sessionId: session.id,
+      });
+    }
+
+    this.logger.log(
+      `sessao sem segundo fator pedindo o codigo para entrar em ${project.name}`,
+    );
+
+    res.redirect(this.loginPage.url());
+
+    return true;
   }
 
   async completeGoogleLogin(
@@ -269,32 +330,171 @@ export class AuthService {
       throw new LoginPageRedirectException('request_expired');
     }
 
+    let account: { id: string; email: string };
+
+    try {
+      account = await this.googleAccount(googleUser, transaction);
+    } catch (error) {
+      if (error instanceof LoginPageRedirectException) {
+        this.storeTransaction(res, transaction);
+      }
+
+      throw error;
+    }
+
+    const stage = await this.steps.gateFor(account.id, transaction.projectId);
+
+    if (!stage) {
+      this.steps.clear(res);
+      res.redirect(
+        await this.completeLogin(res, account.id, transaction, {
+          singleFactor: true,
+          replacesSessionId: this.sessionCookieId(req),
+        }),
+      );
+      return;
+    }
+
     this.storeTransaction(res, transaction);
 
     this.steps.open(res, {
-      userId: googleUser.userId,
-      email: googleUser.email,
-      stage: await this.steps.gateFor(googleUser.userId),
+      userId: account.id,
+      email: account.email,
+      stage,
     });
 
     res.redirect(this.loginPage.url());
   }
 
-  pendingRequest(req: Request): LoginRequestView {
-    const transaction = this.cookies.get<LoginTransaction>(req, SSO_TX_COOKIE);
-    const step = this.steps.read(req);
-    const now = Math.floor(Date.now() / 1000);
+  private async googleAccount(
+    googleUser: GoogleUser,
+    transaction: LoginTransaction,
+  ): Promise<{ id: string; email: string }> {
+    if (googleUser.userId) {
+      return { id: googleUser.userId, email: googleUser.email };
+    }
 
-    if (!transaction || now - transaction.createdAt > TX_COOKIE_TTL_SECONDS) {
+    const project = await this.entries.policy(transaction.projectId);
+
+    if (
+      !project ||
+      transaction.kind === 'session' ||
+      !acceptsSignup(project) ||
+      googleUser.emailVerified !== true
+    ) {
+      this.logger.warn('login recusado: conta Google sem cadastro no SSO');
+      throw new LoginPageRedirectException('account_not_registered');
+    }
+
+    const email = googleUser.email.trim().toLowerCase();
+
+    const linked = await this.linkGoogle(email, googleUser.googleId);
+
+    if (linked) return linked;
+
+    try {
+      const created = await this.prisma.user.create({
+        data: { email, name: googleUser.name, authId: googleUser.googleId },
+        select: { id: true, email: true },
+      });
+
+      this.logger.log(
+        `conta criada pelo Google no projeto ${project.name}: ${created.id}`,
+      );
+
+      return created;
+    } catch (error) {
+      const retry = await this.linkGoogle(email, googleUser.googleId);
+
+      if (retry) return retry;
+
+      throw error;
+    }
+  }
+
+  private async linkGoogle(
+    email: string,
+    googleId: string,
+  ): Promise<{ id: string; email: string } | null> {
+    const existing = await this.prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
+      select: { id: true, email: true, authId: true },
+    });
+
+    if (!existing) return null;
+
+    if (existing.authId && existing.authId !== googleId) {
+      this.logger.warn(
+        `login recusado: authId divergente para o usuario ${existing.id}`,
+      );
+      throw new LoginPageRedirectException('account_mismatch');
+    }
+
+    if (!existing.authId) {
+      await this.prisma.user.update({
+        where: { id: existing.id },
+        data: { authId: googleId },
+      });
+    }
+
+    return { id: existing.id, email: existing.email };
+  }
+
+  sessionCookieId(req: Request): string | undefined {
+    return (
+      this.cookies.get<SsoSessionCookie>(req, SSO_SESSION_COOKIE)
+        ?.authSessionId ?? undefined
+    );
+  }
+
+  pendingTransaction(req: Request): LoginTransaction | null {
+    const transaction = this.cookies.get<LoginTransaction>(req, SSO_TX_COOKIE);
+
+    if (!transaction) return null;
+
+    const age = Math.floor(Date.now() / 1000) - transaction.createdAt;
+
+    return age > TX_COOKIE_TTL_SECONDS ? null : transaction;
+  }
+
+  requirePendingTransaction(req: Request): LoginTransaction {
+    const transaction = this.pendingTransaction(req);
+
+    if (!transaction) throw new ApiException('no_pending_request');
+
+    return transaction;
+  }
+
+  async pendingRequest(req: Request): Promise<LoginRequestView> {
+    const transaction = this.pendingTransaction(req);
+    const step = this.steps.read(req);
+
+    if (!transaction) {
       throw new NotFoundException({
         error: 'no_pending_request',
         message: 'nenhum pedido de login pendente neste navegador',
       });
     }
 
+    const project = await this.prisma.project.findUnique({
+      where: { id: transaction.projectId },
+      select: {
+        ...PROJECT_ACCESS_POLICY_FIELDS,
+        displayName: true,
+        logo: true,
+      },
+    });
+
+    const accountFlows =
+      transaction.kind !== 'session' &&
+      !!project &&
+      acceptsSignup(project) &&
+      this.mailer.available;
+
     return {
       kind: transaction.kind ?? 'authorize',
-      application: transaction.projectName ?? null,
+      application: project?.displayName ?? transaction.projectName ?? null,
+      logo: project?.logo ?? null,
       expiresAt: new Date(
         (transaction.createdAt + TX_COOKIE_TTL_SECONDS) * 1000,
       ).toISOString(),
@@ -303,6 +503,9 @@ export class AuthService {
       ],
       step: step?.stage ?? 'credentials',
       email: step?.email ?? null,
+      signup: accountFlows,
+      passwordReset: accountFlows,
+      humanCheck: accountFlows ? this.humanCheck.widget : null,
     };
   }
 
@@ -380,8 +583,7 @@ export class AuthService {
 
     return this.buildTokenResponse(
       consumed.userId,
-      consumed.projectId,
-      project.clientId,
+      project,
       refreshToken,
       consumed.authSessionId,
     );
@@ -405,8 +607,7 @@ export class AuthService {
 
     return this.buildTokenResponse(
       rotated.userId,
-      rotated.projectId,
-      project.clientId,
+      project,
       rotated.token,
       rotated.authSessionId,
     );
@@ -414,11 +615,13 @@ export class AuthService {
 
   private async buildTokenResponse(
     userId: string,
-    projectId: string,
-    clientId: string,
+    project: Project,
     refreshToken: string,
     authSessionId: string,
   ): Promise<TokenResponse> {
+    const projectId = project.id;
+    const clientId = project.clientId;
+
     const projectUser = await this.prisma.projectUser.findUnique({
       where: { userId_projectId: { userId, projectId } },
       include: {
@@ -431,6 +634,25 @@ export class AuthService {
       throw new OAuthException(
         'invalid_grant',
         'usuario nao tem papel neste projeto',
+      );
+    }
+
+    if (
+      await this.grantLacksSecondFactor(
+        authSessionId,
+        userId,
+        project,
+        projectUser.roleId,
+      )
+    ) {
+      await this.refreshTokens.revokeForSessionAndProject(
+        authSessionId,
+        projectId,
+      );
+
+      throw new OAuthException(
+        'invalid_grant',
+        'o grant vem de uma sessao sem segundo fator, e este acesso o exige',
       );
     }
 
@@ -455,6 +677,22 @@ export class AuthService {
       expires_in: access.expiresIn,
       refresh_token: refreshToken,
     };
+  }
+
+  private async grantLacksSecondFactor(
+    authSessionId: string,
+    userId: string,
+    project: Project,
+    roleId: string,
+  ): Promise<boolean> {
+    const session = await this.prisma.authSession.findUnique({
+      where: { id: authSessionId },
+      select: { singleFactor: true },
+    });
+
+    if (!session?.singleFactor) return false;
+
+    return this.entries.secondFactorRequired(userId, project, roleId);
   }
 
   async revokeToken(body: Revoke): Promise<void> {
@@ -600,6 +838,17 @@ export class AuthService {
     });
 
     if (!membership) return inactive;
+
+    if (
+      session.singleFactor &&
+      (await this.entries.secondFactorRequired(
+        claims.sub,
+        project,
+        membership.roleId,
+      ))
+    ) {
+      return inactive;
+    }
 
     const liveGrant = await this.prisma.refreshToken.findFirst({
       where: {
@@ -760,8 +1009,38 @@ export class AuthService {
     res: Response,
     userId: string,
     transaction: LoginTransaction,
+    options: SessionOptions,
   ): Promise<string> {
-    const session = await this.authSessions.create(userId);
+    const session = await this.establishSession(res, userId, options);
+
+    return transaction.kind === 'session'
+      ? this.sessionLoginTarget(userId, transaction)
+      : this.codeTarget(session.id, userId, transaction);
+  }
+
+  async establishSession(
+    res: Response,
+    userId: string,
+    options: SessionOptions,
+  ): Promise<AuthSession> {
+    const promoted =
+      options.upgradeSessionId && !options.singleFactor
+        ? await this.authSessions.promote(options.upgradeSessionId, userId)
+        : null;
+
+    const session =
+      promoted ??
+      (await this.authSessions.create(userId, options.singleFactor));
+
+    if (options.replacesSessionId && options.replacesSessionId !== session.id) {
+      await this.refreshTokens.revokeForSession(options.replacesSessionId);
+      await this.authSessions.revoke(options.replacesSessionId);
+    }
+
+    const lifetimeSeconds = Math.max(
+      1,
+      Math.floor((session.expiresAt.getTime() - Date.now()) / 1000),
+    );
 
     this.cookies.set(
       res,
@@ -770,12 +1049,10 @@ export class AuthService {
         authSessionId: session.id,
         csrf: this.randomToken(32),
       } satisfies SsoSessionCookie,
-      this.authSessions.maxAgeSeconds,
+      promoted ? lifetimeSeconds : this.authSessions.maxAgeSeconds,
     );
 
-    return transaction.kind === 'session'
-      ? this.sessionLoginTarget(userId, transaction)
-      : this.codeTarget(session.id, userId, transaction);
+    return session;
   }
 
   private async finishSessionLogin(
@@ -826,11 +1103,7 @@ export class AuthService {
     userId: string,
     transaction: PkceTransaction,
   ): Promise<string> {
-    const membership = await this.prisma.projectUser.findUnique({
-      where: {
-        userId_projectId: { userId, projectId: transaction.projectId },
-      },
-    });
+    const membership = await this.entries.enter(userId, transaction.projectId);
 
     if (!membership) {
       throw new AuthorizeRedirectException(

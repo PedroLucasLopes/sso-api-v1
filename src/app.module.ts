@@ -10,7 +10,9 @@ import { AccessModule } from './global/access/access.module';
 import { CookieModule } from './global/cookie/cookie.module';
 import { CryptoModule } from './global/crypto/crypto.module';
 import { SSOAdminGuard } from './global/guards/ssoadminguard.guard';
+import { MailModule } from './global/mail/mail.module';
 import { PrismaModule } from './global/prisma/prisma.module';
+import { SecurityModule } from './global/security/security.module';
 
 import { AuthModule } from './routes/auth/auth.module';
 import { KeyModule } from './routes/Key/key.module';
@@ -33,6 +35,8 @@ import { UserModule } from './routes/User/user.module';
     AccessModule,
     CryptoModule,
     CookieModule,
+    MailModule,
+    SecurityModule,
     KeyModule,
     MeModule,
     UserModule,

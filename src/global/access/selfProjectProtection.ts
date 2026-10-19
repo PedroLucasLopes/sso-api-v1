@@ -1,4 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
+import { MfaPolicy, SignupPolicy } from 'generated/prisma/enums';
 import {
   SSO_ROOT_ROLE,
   SSO_SELF_PROJECT_NAME,
@@ -15,6 +16,27 @@ export const SELF_WRITER_MESSAGE =
 
 export function selfProjectProtected(message: string): ForbiddenException {
   return new ForbiddenException({ error: SELF_PROJECT_PROTECTED, message });
+}
+
+export function assertSelfProjectPolicy(
+  project: { name: string },
+  policy: {
+    signupPolicy: SignupPolicy;
+    mfaPolicy: MfaPolicy;
+    defaultRoleId: string | null;
+  },
+): void {
+  if (project.name !== SSO_SELF_PROJECT_NAME) return;
+
+  if (
+    policy.signupPolicy !== SignupPolicy.CLOSED ||
+    policy.mfaPolicy !== MfaPolicy.REQUIRED ||
+    policy.defaultRoleId !== null
+  ) {
+    throw selfProjectProtected(
+      'o projeto SSO nao abre cadastro, nao tem papel padrao e nunca dispensa o segundo fator',
+    );
+  }
 }
 
 export async function isSelfProject(

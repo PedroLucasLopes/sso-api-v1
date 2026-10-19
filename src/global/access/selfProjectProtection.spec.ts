@@ -1,9 +1,11 @@
 import { ForbiddenException } from '@nestjs/common';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { AdminIdentity } from './adminIdentity.dto';
+import { MfaPolicy, SignupPolicy } from 'generated/prisma/enums';
 import {
   assertKeepsRoot,
   assertNotRootRole,
+  assertSelfProjectPolicy,
   assertSelfWriter,
   LAST_SUPERADMIN,
   SELF_PROJECT_PROTECTED,
@@ -187,6 +189,69 @@ describe('assertNotRootRole', () => {
     expect(
       await refusal(
         assertNotRootRole(prisma, { name: 'ADMIN', projectId: SSO_ID }),
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe('assertSelfProjectPolicy', () => {
+  const closed = {
+    signupPolicy: SignupPolicy.CLOSED,
+    mfaPolicy: MfaPolicy.REQUIRED,
+    defaultRoleId: null,
+  };
+
+  const blocked = (
+    project: { name: string },
+    policy: typeof closed | Record<string, unknown>,
+  ): string | undefined => {
+    try {
+      assertSelfProjectPolicy(project, policy as typeof closed);
+      return undefined;
+    } catch (error) {
+      if (!(error instanceof ForbiddenException)) throw error;
+
+      return (error.getResponse() as { error?: string }).error;
+    }
+  };
+
+  it('o SSO fica fechado e com segundo fator', () => {
+    expect(blocked({ name: 'SSO' }, closed)).toBeUndefined();
+  });
+
+  it('o SSO nunca abre cadastro, nem pela raiz', () => {
+    expect(
+      blocked(
+        { name: 'SSO' },
+        { ...closed, signupPolicy: SignupPolicy.OPEN, defaultRoleId: 'papel' },
+      ),
+    ).toBe(SELF_PROJECT_PROTECTED);
+  });
+
+  it('o SSO nunca dispensa o segundo fator', () => {
+    expect(
+      blocked(
+        { name: 'SSO' },
+        { ...closed, mfaPolicy: MfaPolicy.OPTIONAL, defaultRoleId: 'papel' },
+      ),
+    ).toBe(SELF_PROJECT_PROTECTED);
+  });
+
+  it('o SSO nao tem papel padrao', () => {
+    expect(
+      blocked({ name: 'SSO' }, { ...closed, defaultRoleId: 'papel' }),
+    ).toBe(SELF_PROJECT_PROTECTED);
+  });
+
+  it('as outras aplicacoes escolhem a propria politica', () => {
+    expect(
+      blocked(
+        { name: 'MEETME' },
+        {
+          signupPolicy: SignupPolicy.OPEN,
+          mfaPolicy: MfaPolicy.OPTIONAL,
+          defaultRoleId: 'papel',
+        },
       ),
     ).toBeUndefined();
   });

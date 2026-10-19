@@ -5,17 +5,36 @@ import { ApiException } from 'src/global/error/apiError';
 import { SSO_STEP_COOKIE, STEP_COOKIE_TTL_SECONDS } from '../auth.constant';
 import { LoginStage, LoginStepCookie } from '../dto/loginStep.dto';
 import { CredentialService } from './credential.service';
+import { ProjectEntryService } from './projectEntry.service';
+
+export type SecondFactorStage = Extract<LoginStage, 'enroll_mfa' | 'mfa'>;
 
 @Injectable()
 export class LoginStepService {
   constructor(
     private readonly cookies: CookieService,
     private readonly credentials: CredentialService,
+    private readonly entries: ProjectEntryService,
   ) {}
 
   async gateFor(
     userId: string,
-  ): Promise<Extract<LoginStage, 'enroll_mfa' | 'mfa'>> {
+    projectId: string,
+  ): Promise<SecondFactorStage | null> {
+    const mfa = await this.credentials.mfaStatus(userId);
+
+    if (mfa.enrolled) return 'mfa';
+
+    const project = await this.entries.policy(projectId);
+
+    if (!project) return 'enroll_mfa';
+
+    const entry = await this.entries.assess(userId, project);
+
+    return entry.secondFactorRequired ? 'enroll_mfa' : null;
+  }
+
+  async secondFactorStage(userId: string): Promise<SecondFactorStage> {
     const mfa = await this.credentials.mfaStatus(userId);
 
     return mfa.enrolled ? 'mfa' : 'enroll_mfa';

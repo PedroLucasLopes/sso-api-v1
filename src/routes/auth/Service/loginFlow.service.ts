@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
 import { CookieService } from 'src/global/cookie/cookie.service';
 import { ApiException } from 'src/global/error/apiError';
-import { SSO_TX_COOKIE, TX_COOKIE_TTL_SECONDS } from '../auth.constant';
+import { SSO_TX_COOKIE } from '../auth.constant';
 import { LoginTransaction } from '../dto/pkceTransaction.dto';
 import {
   LoginStepCookie,
@@ -13,7 +13,7 @@ import {
   PasswordLogin,
 } from '../dto/loginStep.dto';
 import { AuthorizeRedirectException } from '../error/oauth.exception';
-import { AuthService } from './auth.service';
+import { AuthService, SessionOptions } from './auth.service';
 import { CredentialService } from './credential.service';
 import { LoginStepService } from './loginStep.service';
 
@@ -39,7 +39,7 @@ export class LoginFlowService {
     res: Response,
     body: PasswordLogin,
   ): Promise<LoginStepView> {
-    this.transaction(req);
+    this.auth.requirePendingTransaction(req);
 
     const attempt = await this.credentials.checkPassword(
       body.email,
@@ -72,7 +72,7 @@ export class LoginFlowService {
   ): Promise<LoginStepView> {
     const step = this.steps.require(req, 'change_password');
 
-    this.transaction(req);
+    this.auth.requirePendingTransaction(req);
 
     await this.credentials.replacePassword(step.userId, body.password);
 
@@ -84,7 +84,7 @@ export class LoginFlowService {
   startMfaEnrollment(req: Request, res: Response): LoginStepView {
     const step = this.steps.require(req, 'enroll_mfa');
 
-    this.transaction(req);
+    this.auth.requirePendingTransaction(req);
 
     const enrollment = this.credentials.startMfaEnrollment(
       step.email,
@@ -107,7 +107,7 @@ export class LoginFlowService {
     body: MfaCode,
   ): Promise<LoginStepView> {
     const step = this.steps.require(req, 'enroll_mfa');
-    const transaction = this.transaction(req);
+    const transaction = this.auth.requirePendingTransaction(req);
 
     if (!step.secret) throw new ApiException('login_step_expired');
 
@@ -119,7 +119,10 @@ export class LoginFlowService {
 
     this.logger.log(`segundo fator cadastrado: ${step.userId}`);
 
-    const done = await this.finish(res, step.userId, transaction);
+    const done = await this.complete(req, res, step.userId, transaction, {
+      singleFactor: false,
+      upgradeSessionId: this.upgradable(req, step),
+    });
 
     return { ...done, recoveryCodes };
   }
@@ -130,13 +133,41 @@ export class LoginFlowService {
     body: MfaCode,
   ): Promise<LoginStepView> {
     const step = this.steps.require(req, 'mfa');
-    const transaction = this.transaction(req);
+    const transaction = this.auth.requirePendingTransaction(req);
 
     if (!(await this.credentials.verifyMfa(step.userId, body.code))) {
       throw new ApiException('mfa_code_invalid');
     }
 
-    return this.finish(res, step.userId, transaction);
+    return this.complete(req, res, step.userId, transaction, {
+      singleFactor: false,
+      upgradeSessionId: this.upgradable(req, step),
+    });
+  }
+
+  async complete(
+    req: Request,
+    res: Response,
+    userId: string,
+    transaction: LoginTransaction,
+    options: SessionOptions,
+  ): Promise<LoginStepView> {
+    this.steps.clear(res);
+    this.cookies.clear(res, SSO_TX_COOKIE, { sameSite: 'lax' });
+
+    try {
+      return {
+        next: 'done',
+        redirectTo: await this.auth.completeLogin(res, userId, transaction, {
+          ...options,
+          replacesSessionId: this.auth.sessionCookieId(req),
+        }),
+      };
+    } catch (error) {
+      if (!(error instanceof AuthorizeRedirectException)) throw error;
+
+      return { next: 'done', redirectTo: this.refusedTarget(error) };
+    }
   }
 
   private async afterFirstFactor(
@@ -145,9 +176,24 @@ export class LoginFlowService {
     userId: string,
     email: string,
   ): Promise<LoginStepView> {
-    const stage = await this.steps.gateFor(userId);
+    const transaction = this.auth.requirePendingTransaction(req);
+    const stage = await this.steps.gateFor(userId, transaction.projectId);
+
+    if (!stage) {
+      return this.complete(req, res, userId, transaction, {
+        singleFactor: true,
+      });
+    }
 
     return this.stepView(res, { userId, email, stage });
+  }
+
+  private upgradable(req: Request, step: LoginStepCookie): string | undefined {
+    if (!step.sessionId) return undefined;
+
+    return this.auth.sessionCookieId(req) === step.sessionId
+      ? step.sessionId
+      : undefined;
   }
 
   private stepView(
@@ -157,26 +203,6 @@ export class LoginFlowService {
     this.steps.open(res, step);
 
     return { next: step.stage, email: step.email };
-  }
-
-  private async finish(
-    res: Response,
-    userId: string,
-    transaction: LoginTransaction,
-  ): Promise<LoginStepView> {
-    this.steps.clear(res);
-    this.cookies.clear(res, SSO_TX_COOKIE, { sameSite: 'lax' });
-
-    try {
-      return {
-        next: 'done',
-        redirectTo: await this.auth.completeLogin(res, userId, transaction),
-      };
-    } catch (error) {
-      if (!(error instanceof AuthorizeRedirectException)) throw error;
-
-      return { next: 'done', redirectTo: this.refusedTarget(error) };
-    }
   }
 
   private refusedTarget(error: AuthorizeRedirectException): string {
@@ -190,19 +216,5 @@ export class LoginFlowService {
     target.searchParams.set('iss', this.issuer);
 
     return target.toString();
-  }
-
-  private transaction(req: Request): LoginTransaction {
-    const transaction = this.cookies.get<LoginTransaction>(req, SSO_TX_COOKIE);
-
-    if (!transaction) throw new ApiException('no_pending_request');
-
-    const age = Math.floor(Date.now() / 1000) - transaction.createdAt;
-
-    if (age > TX_COOKIE_TTL_SECONDS) {
-      throw new ApiException('no_pending_request');
-    }
-
-    return transaction;
   }
 }

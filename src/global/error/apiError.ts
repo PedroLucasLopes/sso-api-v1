@@ -53,6 +53,51 @@ export const API_ERRORS = {
     status: HttpStatus.BAD_REQUEST,
     message: 'o projeto tem rotas',
   },
+  project_policy_root_only: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Only the root changes the sign-up and second factor policies',
+  },
+  default_role_required: {
+    status: HttpStatus.BAD_REQUEST,
+    message: 'Open sign-up and optional second factor need a default role',
+  },
+  role_is_default: {
+    status: HttpStatus.BAD_REQUEST,
+    message: 'The default role of a project cannot be deleted or moved',
+  },
+  logo_invalid: {
+    status: HttpStatus.BAD_REQUEST,
+    message: 'The logo must be a PNG, JPEG or WebP image as a base64 data URI',
+  },
+  logo_too_large: {
+    status: HttpStatus.BAD_REQUEST,
+    message: 'The logo is larger than the limit',
+  },
+
+  signup_closed: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'This application does not accept new accounts',
+  },
+  email_unavailable: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'E-mail delivery is not configured',
+  },
+  human_check_required: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'The human check token is missing',
+  },
+  human_check_failed: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'The human check token was refused',
+  },
+  link_invalid: {
+    status: HttpStatus.GONE,
+    message: 'The link expired, was already used or does not exist',
+  },
+  json_required: {
+    status: HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+    message: 'This route only accepts application/json',
+  },
 
   invalid_credentials: {
     status: HttpStatus.UNAUTHORIZED,

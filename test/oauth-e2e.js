@@ -1296,6 +1296,396 @@ const verifyWithJwks = async (token) => {
   check('depois do logout a mesma sessao nao abre mais nada', afterSignOut.status === 401,
     `HTTP ${afterSignOut.status}`);
 
+  console.log('\n=== cadastro aberto por projeto: OPEN, papel padrao e segundo fator opcional ===');
+
+  const MAILPIT = process.env.MAILPIT_URL || `http://127.0.0.1:${env.MAILPIT_UI_PORT || 8026}`;
+  const humanHeaders = env.TURNSTILE_ENABLED === 'true' ? { 'x-human-check': 'e2e' } : {};
+  const mailpitUp = await fetch(`${MAILPIT}/api/v1/info`).then((r) => r.ok).catch(() => false);
+
+  check('SMTP configurado no .env.docker para os links de conta', !!env.SMTP_HOST,
+    env.SMTP_HOST || 'SMTP_HOST vazio');
+  check('Mailpit no ar para o teste ler os links', mailpitUp,
+    `${MAILPIT}: suba com COMPOSE_PROFILES=mail`);
+
+  if (env.SMTP_HOST && mailpitUp) {
+    const mailboxOf = async (address) => {
+      const res = await fetch(`${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:"${address}"`)}`);
+      return (await res.json().catch(() => ({})))?.messages ?? [];
+    };
+    const waitForMail = async (address, count = 1) => {
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const messages = await mailboxOf(address);
+        if (messages.length >= count) return messages;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      return mailboxOf(address);
+    };
+    const readMail = async (message) =>
+      (message ? (await fetch(`${MAILPIT}/api/v1/message/${message.ID}`)).json() : null);
+    const linkToken = (text) => /#token=([A-Za-z0-9_-]+)/.exec(text ?? '')?.[1] ?? null;
+    const shape = (r) => `${r.status} ${Object.keys(r.json ?? {}).sort().join(',')} ${r.json?.next}`;
+
+    const OPEN_REDIRECT = 'http://localhost:5199/api/auth/callback';
+    const openProject = await api('POST', '/project', { name: `aberto-${tag}` });
+    const openId = openProject.json.id;
+    const openClientId = openProject.json.clientId;
+    run.projects.push(openId);
+
+    check('projeto novo nasce CLOSED, com segundo fator obrigatorio e sem papel padrao',
+      openProject.json?.signupPolicy === 'CLOSED' && openProject.json?.mfaPolicy === 'REQUIRED'
+        && openProject.json?.defaultRoleId === null,
+      `${openProject.json?.signupPolicy} ${openProject.json?.mfaPolicy} ${openProject.json?.defaultRoleId}`);
+
+    const traveler = await api('POST', '/role', { projectId: openId, name: 'VIAJANTE' });
+    await api('POST', '/redirecturi', { projectId: openId, redirectUri: OPEN_REDIRECT });
+    const openKeys = crypto.generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    await api('POST', '/clientkey', { projectId: openId, publicKeyPem: openKeys.publicKey });
+    await api('PATCH', `/project/${openId}/status`, { status: 'ACTIVE' });
+
+    const openAssertion = () => ({
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: clientAssertion(openClientId, openKeys.privateKey),
+    });
+    const openIntrospect = async (token) => {
+      const r = await fetch(`${BASE}/oauth/introspect`, form({ token, token_type_hint: 'access_token', ...openAssertion() }));
+      return r.json().catch(() => null);
+    };
+
+    const noDefault = await api('PATCH', `/project/${openId}/policy`, { signupPolicy: 'OPEN', mfaPolicy: 'OPTIONAL' });
+    check('cadastro aberto sem papel padrao e recusado',
+      noDefault.status === 400 && noDefault.json?.error === 'default_role_required',
+      `HTTP ${noDefault.status} ${noDefault.json?.error}`);
+
+    const foreignRole = await api('PATCH', `/project/${openId}/policy`,
+      { signupPolicy: 'OPEN', mfaPolicy: 'OPTIONAL', defaultRoleId: roleAdmin.id });
+    check('papel padrao de outro projeto e recusado',
+      foreignRole.status === 400 && foreignRole.json?.error === 'role_not_in_project',
+      `HTTP ${foreignRole.status} ${foreignRole.json?.error}`);
+
+    const ssoOpen = await api('PATCH', `/project/${ssoId}/policy`, { signupPolicy: 'OPEN', mfaPolicy: 'OPTIONAL' });
+    check('o projeto SSO nunca abre cadastro nem dispensa o segundo fator, nem pela raiz',
+      ssoOpen.status === 403 && ssoOpen.json?.error === 'sso_project_protected',
+      `HTTP ${ssoOpen.status} ${ssoOpen.json?.error}`);
+
+    const POLICY_ROLE = `E2E_POLITICA_${TAG}`;
+    const POLICY_OPERATOR = 'e2e-politica@exemplo.com';
+    run.users.push(POLICY_OPERATOR);
+    await ssoRole(POLICY_ROLE, [['PATCH', '/project/:id/policy']]);
+    await ensureOperator(db, { email: POLICY_OPERATOR, name: 'E2E Politica', role: POLICY_ROLE });
+    const policyToken = await mintOperatorToken(db, { issuer: BASE, cookieSecret: env.COOKIE_SECRET, email: POLICY_OPERATOR });
+    const notRoot = await adminReq('PATCH', `/project/${openId}/policy`,
+      { authorization: `Bearer ${policyToken.token}` },
+      { signupPolicy: 'OPEN', mfaPolicy: 'OPTIONAL', defaultRoleId: traveler.json.id });
+    check('so a raiz muda a politica, mesmo com a rota concedida no catalogo',
+      notRoot.status === 403 && notRoot.json?.error === 'project_policy_root_only',
+      `HTTP ${notRoot.status} ${notRoot.json?.error}`);
+
+    const opened = await api('PATCH', `/project/${openId}/policy`,
+      { signupPolicy: 'OPEN', mfaPolicy: 'OPTIONAL', defaultRoleId: traveler.json.id });
+    check('a raiz abre o cadastro, com papel padrao e segundo fator opcional',
+      opened.status === 200 && opened.json?.signupPolicy === 'OPEN' && opened.json?.mfaPolicy === 'OPTIONAL'
+        && opened.json?.defaultRoleId === traveler.json.id,
+      `HTTP ${opened.status}`);
+
+    const deleteDefault = await api('DELETE', `/role/${traveler.json.id}`);
+    check('o papel padrao nao se apaga',
+      deleteDefault.status === 400 && deleteDefault.json?.error === 'role_is_default',
+      `HTTP ${deleteDefault.status} ${deleteDefault.json?.error}`);
+
+    const LOGO = `data:image/png;base64,${Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(24),
+    ]).toString('base64')}`;
+    const DISPLAY = `Viagem ${TAG}`;
+
+    const badLogo = await api('PUT', `/project/${openId}`, { logo: 'https://exemplo.com/logo.png' });
+    check('logo so entra como data URI de imagem', badLogo.status === 400 && badLogo.json?.error === 'logo_invalid',
+      `HTTP ${badLogo.status} ${badLogo.json?.error}`);
+
+    const branded = await api('PUT', `/project/${openId}`, { displayName: DISPLAY, logo: LOGO });
+    check('nome de exibicao e logo ficam no projeto',
+      branded.status === 200 && branded.json?.displayName === DISPLAY && branded.json?.logo === LOGO,
+      `HTTP ${branded.status}`);
+
+    const listing = await api('GET', `/project?name=aberto-${tag}`);
+    check('a listagem de projetos nao carrega o logo',
+      listing.status === 200 && listing.json?.length === 1 && !('logo' in listing.json[0]),
+      `HTTP ${listing.status}`);
+
+    const openVerifier = crypto.randomBytes(32).toString('base64url');
+    const openChallenge = crypto.createHash('sha256').update(openVerifier, 'ascii').digest('base64url');
+    const openAuthorize = () => `/oauth/authorize?${new URLSearchParams({
+      client_id: openClientId, redirect_uri: OPEN_REDIRECT, response_type: 'code',
+      code_challenge: openChallenge, code_challenge_method: 'S256', state: crypto.randomBytes(16).toString('base64url'),
+    })}`;
+    const freshOpenTx = async () => cookieOf((await rawReq('GET', openAuthorize())).cookies, 'sso_tx');
+    const exchange = (redirectTo) => tokenReq({
+      grant_type: 'authorization_code',
+      code: new URL(redirectTo).searchParams.get('code'),
+      code_verifier: openVerifier,
+      redirect_uri: OPEN_REDIRECT,
+      ...openAssertion(),
+    });
+
+    const openTx = await freshOpenTx();
+    const openRequest = await rawReq('GET', '/login/request', { cookie: openTx });
+    check('a tela de login oferece cadastro e senha nova no projeto OPEN',
+      openRequest.json?.signup === true && openRequest.json?.passwordReset === true, JSON.stringify(openRequest.json));
+    check('a tela de login traz o nome de exibicao e o logo do projeto',
+      openRequest.json?.application === DISPLAY && openRequest.json?.logo === LOGO,
+      String(openRequest.json?.application));
+    check('a tela recebe a chave publica do Turnstile so quando ele esta ligado',
+      env.TURNSTILE_ENABLED === 'true'
+        ? openRequest.json?.humanCheck?.provider === 'turnstile' && !!openRequest.json?.humanCheck?.siteKey
+        : openRequest.json?.humanCheck === null,
+      JSON.stringify(openRequest.json?.humanCheck));
+
+    const closedTx = cookieOf((await rawReq('GET', authorizeQs())).cookies, 'sso_tx');
+    const closedRequest = await rawReq('GET', '/login/request', { cookie: closedTx });
+    check('projeto CLOSED continua sem cadastro, sem senha nova, sem Turnstile e sem logo',
+      closedRequest.json?.signup === false && closedRequest.json?.passwordReset === false
+        && closedRequest.json?.humanCheck === null && closedRequest.json?.logo === null
+        && closedRequest.json?.application === `krloc-${tag}`,
+      JSON.stringify(closedRequest.json));
+
+    const NEW_EMAIL = `cadastro-${tag}@exemplo.com`;
+    const PASSWORD_EMAIL = `com-senha-${tag}@exemplo.com`;
+    const GOOGLE_EMAIL = `teste-${tag}@exemplo.com`;
+    run.users.push(NEW_EMAIL, PASSWORD_EMAIL);
+    const accountBody = (email) => ({ email, locale: 'pt-BR' });
+
+    const closedSignup = await rawReq('POST', '/login/signup', { cookie: closedTx, ...humanHeaders }, accountBody(NEW_EMAIL));
+    check('cadastro com pedido de projeto CLOSED e recusado',
+      closedSignup.status === 403 && closedSignup.json?.error === 'signup_closed',
+      `HTTP ${closedSignup.status} ${closedSignup.json?.error}`);
+
+    const noTxSignup = await rawReq('POST', '/login/signup', { ...humanHeaders }, accountBody(NEW_EMAIL));
+    check('cadastro sem pedido pendente e recusado',
+      noTxSignup.status === 404 && noTxSignup.json?.error === 'no_pending_request',
+      `HTTP ${noTxSignup.status} ${noTxSignup.json?.error}`);
+
+    const foreignOrigin = await rawReq('POST', '/login/signup',
+      { cookie: openTx, origin: 'http://evil.example', ...humanHeaders }, accountBody(NEW_EMAIL));
+    check('cadastro vindo de outra origem e recusado',
+      foreignOrigin.status === 403 && foreignOrigin.json?.error === 'origin_not_allowed',
+      `HTTP ${foreignOrigin.status} ${foreignOrigin.json?.error}`);
+
+    const formPost = await fetch(`${BASE}/login/signup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: openTx, ...humanHeaders },
+      body: new URLSearchParams(accountBody(NEW_EMAIL)).toString(),
+    });
+    check('cadastro por formulario de outro site, sem JSON, e recusado', formPost.status === 415,
+      `HTTP ${formPost.status}`);
+
+    if (env.TURNSTILE_ENABLED === 'true') {
+      const noHuman = await rawReq('POST', '/login/signup', { cookie: openTx }, accountBody(NEW_EMAIL));
+      check('cadastro sem o token do Turnstile e recusado',
+        noHuman.status === 403 && noHuman.json?.error === 'human_check_required',
+        `HTTP ${noHuman.status} ${noHuman.json?.error}`);
+    }
+
+    const withPassword = await api('POST', '/user', { name: 'Com Senha', email: PASSWORD_EMAIL });
+    await api('POST', `/user/${withPassword.json.id}/password`);
+
+    const signupNew = await rawReq('POST', '/login/signup', { cookie: openTx, ...humanHeaders }, accountBody(NEW_EMAIL));
+    const signupGoogle = await rawReq('POST', '/login/signup', { cookie: openTx, ...humanHeaders }, accountBody(GOOGLE_EMAIL));
+    const signupPassword = await rawReq('POST', '/login/signup', { cookie: openTx, ...humanHeaders }, accountBody(PASSWORD_EMAIL));
+    check('o cadastro responde igual exista o e-mail ou nao',
+      signupNew.status === 202 && signupNew.json?.next === 'check_email'
+        && shape(signupNew) === shape(signupGoogle) && shape(signupNew) === shape(signupPassword),
+      [signupNew, signupGoogle, signupPassword].map(shape).join(' | '));
+
+    const newMail = (await waitForMail(NEW_EMAIL))[0];
+    const newMailBody = await readMail(newMail);
+    const signupToken = linkToken(newMailBody?.Text);
+    check('e-mail novo recebe o link de criar conta, na lingua pedida',
+      !!signupToken && newMail?.Subject === `Crie sua conta no ${DISPLAY}`, newMail?.Subject ?? 'nenhum e-mail');
+    check('o token vai no fragmento do link, que nenhum servidor recebe',
+      (newMailBody?.Text ?? '').includes(`${new URL(LOGIN_URL).origin}/link#token=`),
+      /(https?:\/\/[^\s#]+#token=)/.exec(newMailBody?.Text ?? '')?.[1] ?? 'sem link');
+
+    const googleMail = (await waitForMail(GOOGLE_EMAIL))[0];
+    const googleBody = await readMail(googleMail);
+    check('conta sem senha recebe o aviso de que ja existe, sem link',
+      !!googleMail && !linkToken(googleBody?.Text), googleMail?.Subject ?? 'nenhum e-mail');
+
+    const passwordMail = (await waitForMail(PASSWORD_EMAIL))[0];
+    const passwordBody = await readMail(passwordMail);
+    check('conta com senha recebe o aviso com link de senha nova',
+      !!passwordMail && !!linkToken(passwordBody?.Text), passwordMail?.Subject ?? 'nenhum e-mail');
+
+    const stored = (await db.query(
+      `SELECT "tokenHash" FROM "AccountEmail" WHERE email = $1 AND kind = 'SIGNUP'::"AccountEmailKind"`, [NEW_EMAIL],
+    )).rows;
+    check('o banco guarda so o hash do token do link',
+      stored.length === 1 && /^[0-9a-f]{64}$/.test(stored[0].tokenHash) && stored[0].tokenHash !== signupToken,
+      `${stored.length} linha(s)`);
+
+    const linkView = await rawReq('POST', '/account/link', {}, { token: signupToken });
+    check('o link de cadastro diz para quem e de qual aplicacao',
+      linkView.status === 200 && linkView.json?.purpose === 'signup' && linkView.json?.email === NEW_EMAIL
+        && linkView.json?.application === DISPLAY,
+      `HTTP ${linkView.status} ${JSON.stringify(linkView.json)}`);
+
+    const bogusLink = await rawReq('POST', '/account/link', {}, { token: 'nao-existe' });
+    check('link desconhecido responde link_invalid',
+      bogusLink.status === 410 && bogusLink.json?.error === 'link_invalid', `HTTP ${bogusLink.status}`);
+
+    const PERSON = 'Beatriz Cadastro';
+    const personal = await rawReq('POST', '/account/signup', {}, { token: signupToken, name: PERSON, password: 'Beatriz-viaja-2027' });
+    check('senha com o nome da pessoa e recusada pelo codigo do motivo',
+      personal.status === 400 && personal.json?.error === 'password_refused' && personal.json?.reason === 'personal_data',
+      `HTTP ${personal.status} ${personal.json?.reason}`);
+
+    const lettersOnly = await rawReq('POST', '/account/signup', {}, { token: signupToken, name: PERSON, password: 'somente-letras-aqui' });
+    check('senha sem numero e recusada',
+      lettersOnly.status === 400 && lettersOnly.json?.reason === 'needs_letters_and_digits',
+      `HTTP ${lettersOnly.status} ${lettersOnly.json?.reason}`);
+
+    const PASSWORD = `Roteiro-${crypto.randomBytes(6).toString('hex')}-9`;
+    const created = await rawReq('POST', '/account/signup', { cookie: openTx }, { token: signupToken, name: PERSON, password: PASSWORD });
+    const createdTarget = created.json?.redirectTo ? new URL(created.json.redirectTo) : null;
+    check('com o pedido ainda vivo neste navegador, a conta nasce e volta direto com code',
+      created.status === 200 && created.json?.next === 'done'
+        && `${createdTarget?.origin}${createdTarget?.pathname}` === OPEN_REDIRECT && !!createdTarget?.searchParams.get('code'),
+      created.json?.redirectTo ?? `HTTP ${created.status} ${JSON.stringify(created.json)}`);
+
+    const newSessionCookie = cookieOf(created.cookies, 'sso_session');
+    check('a conta nova sai com sessao do SSO', !!newSessionCookie);
+
+    const firstGrant = createdTarget ? await exchange(created.json.redirectTo) : { status: 0, json: null };
+    const firstClaims = firstGrant.json?.access_token ? await verifyWithJwks(firstGrant.json.access_token) : null;
+    check('o code vira token com o papel padrao do projeto',
+      firstGrant.status === 200 && firstClaims?.ok && JSON.stringify(firstClaims.payload.roles) === '["VIAJANTE"]'
+        && firstClaims.payload.email === NEW_EMAIL,
+      `HTTP ${firstGrant.status} ${JSON.stringify(firstClaims?.payload?.roles ?? null)}`);
+
+    const reused = await rawReq('POST', '/account/signup', {}, { token: signupToken, name: PERSON, password: PASSWORD });
+    check('o link de cadastro vale uma vez so',
+      reused.status === 410 && reused.json?.error === 'link_invalid', `HTTP ${reused.status}`);
+
+    const newUserId = (await db.query('SELECT id FROM "User" WHERE email = $1', [NEW_EMAIL])).rows[0]?.id;
+    const openSessions = (await db.query(
+      'SELECT "singleFactor" FROM "AuthSession" WHERE "userId" = $1 AND "revokedAt" IS NULL', [newUserId],
+    )).rows;
+    check('a sessao de quem entrou sem segundo fator fica marcada assim',
+      openSessions.length === 1 && openSessions[0].singleFactor === true, JSON.stringify(openSessions));
+
+    check('a introspeccao do projeto OPEN responde ativo para esse grant',
+      (await openIntrospect(firstGrant.json?.access_token))?.active === true);
+
+    const loginTx = await freshOpenTx();
+    const passwordLogin = await rawReq('POST', '/login/password', { cookie: loginTx }, { email: NEW_EMAIL, password: PASSWORD });
+    check('quem se cadastrou entra com a senha que escolheu, sem segundo fator',
+      passwordLogin.status === 200 && passwordLogin.json?.next === 'done'
+        && new URL(passwordLogin.json.redirectTo).searchParams.has('code'),
+      `HTTP ${passwordLogin.status} ${passwordLogin.json?.next}`);
+
+    await api('POST', '/projectuser', { userId: newUserId, projectId, roleId: roleAdmin.id });
+    const stepUp = await rawReq('GET', authorizeQs(), { cookie: newSessionCookie });
+    const stepTx = cookieOf(stepUp.cookies, 'sso_tx');
+    const stepCookie = cookieOf(stepUp.cookies, 'sso_step');
+    check('sessao sem segundo fator nao abre projeto que o exige: volta a tela de login',
+      stepUp.status === 302 && stepUp.location === LOGIN_URL && !!stepTx && !!stepCookie,
+      stepUp.location ?? `HTTP ${stepUp.status}`);
+
+    const stepRequest = await rawReq('GET', '/login/request', { cookie: `${stepTx}; ${stepCookie}` });
+    check('a tela pede so o cadastro do segundo fator, para a mesma pessoa',
+      stepRequest.json?.step === 'enroll_mfa' && stepRequest.json?.email === NEW_EMAIL,
+      JSON.stringify({ step: stepRequest.json?.step, email: stepRequest.json?.email }));
+
+    await ensureOperator(db, { email: NEW_EMAIL, name: PERSON, role: ROLE_READER });
+    const consoleSingle = await rawReq('GET', '/project', { cookie: newSessionCookie });
+    check('o console recusa sessao sem segundo fator, mesmo de quem tem papel no SSO',
+      consoleSingle.status === 401 && consoleSingle.json?.error === 'login_required',
+      `HTTP ${consoleSingle.status} ${consoleSingle.json?.error}`);
+    await db.query('DELETE FROM "ProjectUser" WHERE "userId" = $1 AND "projectId" = $2', [newUserId, ssoId]);
+
+    const existingEnters = await rawReq('GET', openAuthorize(), { cookie: sessionCookie });
+    const enteredRole = (await db.query(
+      `SELECT r.name FROM "ProjectUser" pu JOIN "Role" r ON r.id = pu."roleId"
+        WHERE pu."userId" = $1 AND pu."projectId" = $2`, [user.json.id, openId],
+    )).rows[0]?.name;
+    check('conta que ja existia ganha o papel padrao ao entrar pela primeira vez num projeto OPEN',
+      existingEnters.status === 302 && !!existingEnters.location
+        && new URL(existingEnters.location).searchParams.has('code') && enteredRole === 'VIAJANTE',
+      `${existingEnters.location ?? `HTTP ${existingEnters.status}`} papel ${enteredRole ?? 'nenhum'}`);
+
+    const resetTx = await freshOpenTx();
+    const resetRequest = await rawReq('POST', '/login/password/reset', { cookie: resetTx, ...humanHeaders }, accountBody(NEW_EMAIL));
+    const unknownReset = await rawReq('POST', '/login/password/reset', { cookie: resetTx, ...humanHeaders },
+      accountBody(`ninguem-${tag}@exemplo.com`));
+    check('o pedido de senha nova responde igual para e-mail sem conta',
+      resetRequest.status === 202 && shape(resetRequest) === shape(unknownReset),
+      `${shape(resetRequest)} | ${shape(unknownReset)}`);
+
+    const resetMail = (await waitForMail(NEW_EMAIL, 2)).find((m) => m.Subject === `Senha nova para o ${DISPLAY}`);
+    const resetToken = linkToken((await readMail(resetMail))?.Text);
+    check('o link de senha nova chega ao e-mail da conta', !!resetToken, resetMail?.Subject ?? 'nenhum e-mail');
+
+    const resetView = await rawReq('POST', '/account/link', {}, { token: resetToken });
+    check('o link de senha nova abre a tela de senha', resetView.json?.purpose === 'password',
+      JSON.stringify(resetView.json));
+
+    const NEW_PASSWORD = `Mochila-${crypto.randomBytes(6).toString('hex')}-7`;
+    const reset = await rawReq('POST', '/account/password', { cookie: newSessionCookie }, { token: resetToken, password: NEW_PASSWORD });
+    check('a senha nova pelo link pede para entrar de novo',
+      reset.status === 200 && reset.json?.next === 'credentials', `HTTP ${reset.status} ${reset.json?.next}`);
+
+    const liveSessions = (await db.query(
+      'SELECT count(*)::int AS n FROM "AuthSession" WHERE "userId" = $1 AND "revokedAt" IS NULL', [newUserId],
+    )).rows[0].n;
+    check('trocar a senha pelo link encerra todas as sessoes da conta', liveSessions === 0, `${liveSessions} viva(s)`);
+    check('o access token emitido antes da troca passa a responder inativo',
+      (await openIntrospect(firstGrant.json?.access_token))?.active === false);
+
+    const afterResetTx = await freshOpenTx();
+    const oldPassword = await rawReq('POST', '/login/password', { cookie: afterResetTx }, { email: NEW_EMAIL, password: PASSWORD });
+    check('a senha antiga deixa de valer',
+      oldPassword.status === 401 && oldPassword.json?.error === 'invalid_credentials', `HTTP ${oldPassword.status}`);
+    const newLogin = await rawReq('POST', '/login/password', { cookie: afterResetTx }, { email: NEW_EMAIL, password: NEW_PASSWORD });
+    check('a senha nova entra', newLogin.json?.next === 'done', `HTTP ${newLogin.status} ${newLogin.json?.next}`);
+
+    const changedMail = (await waitForMail(NEW_EMAIL, 3)).find((m) => m.Subject === `Sua senha do ${DISPLAY} foi trocada`);
+    check('a troca manda o aviso de senha trocada', !!changedMail, changedMail?.Subject ?? 'sem aviso');
+
+    const secondGrant = newLogin.json?.redirectTo ? await exchange(newLogin.json.redirectTo) : { json: null };
+    await api('PATCH', `/project/${openId}/policy`,
+      { signupPolicy: 'OPEN', mfaPolicy: 'REQUIRED', defaultRoleId: traveler.json.id });
+    check('passar o projeto a REQUIRED deixa inativo o grant que entrou sem segundo fator',
+      (await openIntrospect(secondGrant.json?.access_token))?.active === false);
+    const refreshRequired = await tokenReq({
+      grant_type: 'refresh_token', refresh_token: secondGrant.json?.refresh_token, ...openAssertion(),
+    });
+    check('e o refresh desse grant passa a ser recusado',
+      refreshRequired.status === 400 && refreshRequired.json?.error === 'invalid_grant',
+      `HTTP ${refreshRequired.status} ${refreshRequired.json?.error}`);
+
+    const quotaTx = await freshOpenTx();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await rawReq('POST', '/login/password/reset', { cookie: quotaTx, ...humanHeaders }, accountBody(NEW_EMAIL));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const counted = (await db.query(
+      `SELECT count(*)::int AS n FROM "AccountEmail"
+        WHERE email = $1 AND kind <> 'PASSWORD_CHANGED'::"AccountEmailKind"`, [NEW_EMAIL],
+    )).rows[0].n;
+    check('no maximo 3 e-mails de conta por hora para o mesmo endereco', counted === 3, `${counted} e-mail(s)`);
+
+    const testMessages = (await Promise.all([NEW_EMAIL, PASSWORD_EMAIL, GOOGLE_EMAIL].map(mailboxOf))).flat();
+    if (testMessages.length) {
+      await fetch(`${MAILPIT}/api/v1/messages`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ IDs: testMessages.map((message) => message.ID) }),
+      }).catch(() => {});
+    }
+  }
+
   const cleaned = await cleanRun();
 
   console.log(
