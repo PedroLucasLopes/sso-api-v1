@@ -9,7 +9,8 @@ export type AccountMailTemplate =
   | 'existsWithReset'
   | 'existsWithGoogle'
   | 'reset'
-  | 'passwordChanged';
+  | 'passwordChanged'
+  | 'deletion';
 
 export interface AccountMailText {
   subject: string;
@@ -68,6 +69,14 @@ export const ACCOUNT_MAIL_MESSAGES: Record<AccountLocale, AccountMailCatalog> =
           closing:
             'Se não foi você, peça uma senha nova agora, pela tela de entrada do {app}.',
         },
+        deletion: {
+          subject: 'Confirme a exclusão da sua conta no {app}',
+          heading: 'Excluir a sua conta',
+          body: 'Recebemos um pedido, feito pela página da sua conta, para excluir a sua conta no {app}. Ao confirmar pelo link, a conta, a senha, o segundo fator e o acesso a todas as aplicações que entram pelo {app} são apagados, e essas aplicações são avisadas para apagar o que guardam de você. Não há como desfazer.',
+          action: 'Confirmar a exclusão',
+          closing:
+            'Se não foi você, ignore este e-mail e troque a sua senha: a conta só é excluída pelo link.',
+        },
       },
       validity: 'O link vale por {minutes} minutos e funciona uma vez.',
       fallback: 'Se o botão não abrir, copie este endereço no navegador:',
@@ -114,6 +123,14 @@ export const ACCOUNT_MAIL_MESSAGES: Record<AccountLocale, AccountMailCatalog> =
           closing:
             "If this wasn't you, ask for a new password now on the {app} sign-in screen.",
         },
+        deletion: {
+          subject: 'Confirm the deletion of your {app} account',
+          heading: 'Delete your account',
+          body: 'We received a request, made from your account page, to delete your {app} account. Once you confirm with the link, the account, its password, its second factor and its access to every application that signs in through {app} are erased, and those applications are told to erase what they keep about you. This cannot be undone.',
+          action: 'Confirm the deletion',
+          closing:
+            "If this wasn't you, ignore this e-mail and change your password: the account is only deleted through the link.",
+        },
       },
       validity: 'The link is valid for {minutes} minutes and works once.',
       fallback:
@@ -159,6 +176,14 @@ export const ACCOUNT_MAIL_MESSAGES: Record<AccountLocale, AccountMailCatalog> =
           body: 'La contraseña de tu cuenta se acaba de cambiar con el enlace enviado a este correo, y se cerraron todas las sesiones abiertas.',
           closing:
             'Si no fuiste tú, pide una contraseña nueva ahora en la pantalla de acceso de {app}.',
+        },
+        deletion: {
+          subject: 'Confirma la eliminación de tu cuenta en {app}',
+          heading: 'Eliminar tu cuenta',
+          body: 'Recibimos una solicitud, hecha desde la página de tu cuenta, para eliminar tu cuenta en {app}. Al confirmar con el enlace, se borran la cuenta, su contraseña, su segundo factor y el acceso a todas las aplicaciones que entran por {app}, y esas aplicaciones reciben el aviso para borrar lo que guardan sobre ti. No se puede deshacer.',
+          action: 'Confirmar la eliminación',
+          closing:
+            'Si no fuiste tú, ignora este correo y cambia tu contraseña: la cuenta solo se elimina con el enlace.',
         },
       },
       validity: 'El enlace vale por {minutes} minutos y funciona una vez.',

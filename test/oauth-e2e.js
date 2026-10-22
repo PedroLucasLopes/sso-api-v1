@@ -1676,7 +1676,219 @@ const verifyWithJwks = async (token) => {
     )).rows[0].n;
     check('no maximo 3 e-mails de conta por hora para o mesmo endereco', counted === 3, `${counted} e-mail(s)`);
 
-    const testMessages = (await Promise.all([NEW_EMAIL, PASSWORD_EMAIL, GOOGLE_EMAIL].map(mailboxOf))).flat();
+    console.log('\n=== quem foi tirado de um projeto OPEN nao volta sozinho ===');
+
+    const blocksOf = async (userId) => (await db.query(
+      'SELECT 1 FROM "ProjectBlock" WHERE "userId" = $1 AND "projectId" = $2', [userId, openId],
+    )).rowCount;
+
+    const removed = await api('DELETE', `/projectuser/${openId}/${user.json.id}`);
+    check('tirar alguem de um projeto OPEN deixa a pessoa bloqueada nele',
+      removed.status === 204 && (await blocksOf(user.json.id)) === 1, `HTTP ${removed.status}`);
+
+    const blockedEntry = await rawReq('GET', openAuthorize(), { cookie: sessionCookie });
+    const blockedTarget = blockedEntry.location ? new URL(blockedEntry.location) : null;
+    const backAsMember = (await db.query(
+      'SELECT 1 FROM "ProjectUser" WHERE "userId" = $1 AND "projectId" = $2', [user.json.id, openId],
+    )).rowCount;
+    check('quem foi tirado nao volta com o papel padrao no login seguinte: access_denied',
+      blockedEntry.status === 302 && blockedTarget?.searchParams.get('error') === 'access_denied' && backAsMember === 0,
+      `${blockedEntry.location ?? `HTTP ${blockedEntry.status}`} vinculo ${backAsMember}`);
+
+    const blockedOverview = await api('GET', `/project/${openId}/overview`);
+    check('o overview do projeto lista quem esta bloqueado',
+      blockedOverview.json?.blocked?.some((entry) => entry.id === user.json.id && !!entry.blockedAt) === true,
+      JSON.stringify(blockedOverview.json?.blocked ?? null));
+
+    const readmitted = await api('POST', '/projectuser', { userId: user.json.id, projectId: openId, roleId: traveler.json.id });
+    const readmittedEntry = await rawReq('GET', openAuthorize(), { cookie: sessionCookie });
+    check('vincular de novo pelo console tira o bloqueio, e a pessoa volta a entrar',
+      readmitted.status === 201 && (await blocksOf(user.json.id)) === 0 && readmittedEntry.status === 302
+        && new URL(readmittedEntry.location ?? 'http://x').searchParams.has('code'),
+      `HTTP ${readmitted.status} ${readmittedEntry.location ?? readmittedEntry.status}`);
+
+    console.log('\n=== a conta da pessoa: segundo fator depois e exclusao pela propria pessoa ===');
+
+    const totpNow = (secret) => {
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+      const bytes = [];
+      let bits = 0;
+      let value = 0;
+      for (const character of secret.replace(/[\s=]/g, '').toUpperCase()) {
+        value = (value << 5) | alphabet.indexOf(character);
+        bits += 5;
+        if (bits >= 8) {
+          bytes.push((value >>> (bits - 8)) & 255);
+          bits -= 8;
+        }
+      }
+      const counter = Buffer.alloc(8);
+      counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)));
+      const digest = crypto.createHmac('sha1', Buffer.from(bytes)).update(counter).digest();
+      const offset = digest[digest.length - 1] & 15;
+      return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+    };
+    const sessionFor = async (userId, singleFactor = false) => {
+      const id = crypto.randomUUID();
+      const csrf = crypto.randomBytes(32).toString('base64url');
+      await db.query(
+        `INSERT INTO "AuthSession" (id, "userId", "expiresAt", "singleFactor")
+         VALUES ($1, $2, (now() AT TIME ZONE 'utc') + interval '1 hour', $3)`,
+        [id, userId, singleFactor],
+      );
+      return { id, csrf, cookie: `sso_session=${sealCookie({ authSessionId: id, csrf })}` };
+    };
+    const accountOrigin = new URL(LOGIN_URL).origin;
+    const writerOf = (session, cookie = session.cookie) =>
+      ({ cookie, 'x-csrf-token': session.csrf, origin: accountOrigin });
+
+    check('o discovery anuncia a lista de contas excluidas',
+      metadata.deleted_accounts_endpoint === `${BASE}/oauth/deleted-accounts`,
+      String(metadata.deleted_accounts_endpoint));
+
+    const ACCOUNT_EMAIL = `conta-${tag}@exemplo.com`;
+    run.users.push(ACCOUNT_EMAIL);
+    const holder = await api('POST', '/user', { name: 'Conta Propria', email: ACCOUNT_EMAIL });
+    const holderId = holder.json.id;
+    const holderPassword = (await api('POST', `/user/${holderId}/password`)).json?.password;
+    await api('POST', '/projectuser', { userId: holderId, projectId: openId, roleId: traveler.json.id });
+    const holderSession = await sessionFor(holderId, true);
+
+    const noAccountSession = await rawReq('GET', '/account/profile');
+    check('a pagina da conta sem sessao responde login_required',
+      noAccountSession.status === 401 && noAccountSession.json?.error === 'login_required',
+      `HTTP ${noAccountSession.status} ${noAccountSession.json?.error}`);
+
+    const profile = await rawReq('GET', '/account/profile', { cookie: holderSession.cookie });
+    check('a pagina da conta mostra quem e, onde a conta entra e o estado do segundo fator',
+      profile.status === 200 && profile.json?.email === ACCOUNT_EMAIL && profile.json?.password === true
+        && profile.json?.secondFactor?.enrolled === false && profile.json?.csrfToken === holderSession.csrf
+        && profile.json?.applications?.includes(DISPLAY) === true && profile.json?.deletion?.allowed === true,
+      `HTTP ${profile.status} ${JSON.stringify({ ...profile.json, csrfToken: undefined })}`);
+
+    const setupNoCsrf = await rawReq('POST', '/account/mfa/setup',
+      { cookie: holderSession.cookie, origin: accountOrigin }, { password: holderPassword });
+    check('cadastrar o segundo fator pela conta exige X-CSRF-Token',
+      setupNoCsrf.status === 403 && setupNoCsrf.json?.error === 'csrf_token_invalid', `HTTP ${setupNoCsrf.status}`);
+
+    const setupForeign = await rawReq('POST', '/account/mfa/setup',
+      { ...writerOf(holderSession), origin: 'http://evil.example' }, { password: holderPassword });
+    check('e recusa pedido de outra origem',
+      setupForeign.status === 403 && setupForeign.json?.error === 'origin_not_allowed', `HTTP ${setupForeign.status}`);
+
+    const setupWrongPassword = await rawReq('POST', '/account/mfa/setup', writerOf(holderSession),
+      { password: 'senha-que-nao-e-9' });
+    check('e pede a senha atual de quem tem senha',
+      setupWrongPassword.status === 403 && setupWrongPassword.json?.error === 'current_password_invalid',
+      `HTTP ${setupWrongPassword.status} ${setupWrongPassword.json?.error}`);
+
+    const setup = await rawReq('POST', '/account/mfa/setup', writerOf(holderSession), { password: holderPassword });
+    const pendingCookie = cookieOf(setup.cookies, 'sso_account_mfa');
+    check('com a senha certa devolve o segredo e o otpauth',
+      setup.status === 200 && /^[A-Z2-7]+$/.test(setup.json?.secret ?? '')
+        && (setup.json?.otpauth ?? '').startsWith('otpauth://totp/') && !!pendingCookie,
+      `HTTP ${setup.status} ${setup.json?.error ?? ''}`);
+
+    const enrollWriter = writerOf(holderSession, `${holderSession.cookie}; ${pendingCookie}`);
+    const wrongCode = await rawReq('POST', '/account/mfa/confirm', enrollWriter, { code: '000000' });
+    check('codigo errado nao cadastra o segundo fator',
+      wrongCode.status === 401 && wrongCode.json?.error === 'mfa_code_invalid', `HTTP ${wrongCode.status}`);
+
+    const confirmed = await rawReq('POST', '/account/mfa/confirm', enrollWriter, { code: totpNow(setup.json?.secret ?? '') });
+    const promoted = (await db.query('SELECT "singleFactor" FROM "AuthSession" WHERE id = $1', [holderSession.id])).rows[0];
+    check('o codigo certo cadastra, devolve os codigos de recuperacao e promove a sessao',
+      confirmed.status === 200 && confirmed.json?.recoveryCodes?.length === 8 && promoted?.singleFactor === false,
+      `HTTP ${confirmed.status} ${JSON.stringify(promoted)}`);
+
+    const enrolledProfile = await rawReq('GET', '/account/profile', { cookie: holderSession.cookie });
+    check('a pagina passa a mostrar o segundo fator ativo',
+      enrolledProfile.json?.secondFactor?.enrolled === true && enrolledProfile.json?.secondFactor?.recoveryCodesLeft === 8,
+      JSON.stringify(enrolledProfile.json?.secondFactor));
+
+    const setupAgain = await rawReq('POST', '/account/mfa/setup', writerOf(holderSession), { password: holderPassword });
+    check('quem ja tem o segundo fator nao cadastra outro por cima',
+      setupAgain.status === 409 && setupAgain.json?.error === 'mfa_already_enrolled', `HTTP ${setupAgain.status}`);
+
+    const rootSession = await sessionFor(operatorId);
+    const rootProfile = await rawReq('GET', '/account/profile', { cookie: rootSession.cookie });
+    const rootDeletion = await rawReq('POST', '/account/deletion', writerOf(rootSession), { locale: 'pt-BR' });
+    check('conta com papel no console do SSO nao se exclui sozinha',
+      rootProfile.json?.deletion?.allowed === false && rootProfile.json?.deletion?.reason === 'admin'
+        && rootDeletion.status === 403 && rootDeletion.json?.error === 'account_deletion_admin',
+      `HTTP ${rootDeletion.status} ${rootDeletion.json?.error}`);
+
+    const busySession = await sessionFor(newUserId);
+    const busyDeletion = await rawReq('POST', '/account/deletion', writerOf(busySession), { locale: 'pt-BR' });
+    check('o pedido de exclusao respeita a cota de e-mails do endereco',
+      busyDeletion.status === 429 && busyDeletion.json?.error === 'account_email_quota',
+      `HTTP ${busyDeletion.status} ${busyDeletion.json?.error}`);
+
+    const deletionRequest = await rawReq('POST', '/account/deletion', writerOf(holderSession), { locale: 'pt-BR' });
+    check('o pedido de exclusao manda o link ao e-mail da conta',
+      deletionRequest.status === 202 && deletionRequest.json?.next === 'check_email',
+      `HTTP ${deletionRequest.status} ${deletionRequest.json?.error ?? ''}`);
+
+    const deletionMail = (await waitForMail(ACCOUNT_EMAIL))[0];
+    const deletionToken = linkToken((await readMail(deletionMail))?.Text);
+    check('o e-mail de exclusao chega com o link de confirmar',
+      !!deletionToken && (deletionMail?.Subject ?? '').startsWith('Confirme a exclusão da sua conta'),
+      deletionMail?.Subject ?? 'nenhum e-mail');
+
+    const deletionView = await rawReq('POST', '/account/link', {}, { token: deletionToken });
+    check('o link de exclusao abre a tela de confirmar, para a conta certa',
+      deletionView.status === 200 && deletionView.json?.purpose === 'delete' && deletionView.json?.email === ACCOUNT_EMAIL,
+      JSON.stringify(deletionView.json));
+
+    const erased = await rawReq('POST', '/account/delete', { cookie: holderSession.cookie }, { token: deletionToken });
+    const leftovers = (await db.query(
+      `SELECT (SELECT count(*) FROM "User" WHERE id = $1)::int AS users,
+              (SELECT count(*) FROM "AuthSession" WHERE "userId" = $1)::int AS sessions,
+              (SELECT count(*) FROM "ProjectUser" WHERE "userId" = $1)::int AS memberships,
+              (SELECT count(*) FROM "UserMfa" WHERE "userId" = $1)::int AS factors,
+              (SELECT count(*) FROM "AccountEmail" WHERE email = $2)::int AS emails`,
+      [holderId, ACCOUNT_EMAIL],
+    )).rows[0];
+    check('confirmar pelo link apaga a conta, as sessoes, os vinculos, o segundo fator e os e-mails dela',
+      erased.status === 200 && erased.json?.next === 'deleted'
+        && Object.values(leftovers).every((count) => count === 0),
+      `HTTP ${erased.status} ${JSON.stringify(leftovers)}`);
+    check('e manda o navegador apagar o cookie da sessao',
+      erased.cookies.some((line) => /^(__Host-)?sso_session=;/.test(line)), erased.cookies.join(' | '));
+
+    const erasedAgain = await rawReq('POST', '/account/delete', {}, { token: deletionToken });
+    check('o link de exclusao vale uma vez so',
+      erasedAgain.status === 410 && erasedAgain.json?.error === 'link_invalid', `HTTP ${erasedAgain.status}`);
+
+    const feedOf = async (body) => {
+      const response = await fetch(`${BASE}/oauth/deleted-accounts`, form(body));
+      return { status: response.status, json: await response.json().catch(() => null) };
+    };
+
+    const feedNoClient = await feedOf({});
+    check('a lista de contas excluidas exige autenticacao de cliente',
+      feedNoClient.status === 401 && feedNoClient.json?.error === 'invalid_client', `HTTP ${feedNoClient.status}`);
+
+    const feed = await feedOf(openAssertion());
+    check('a aplicacao do projeto da conta recebe o sub dela na lista de excluidas',
+      feed.status === 200 && feed.json?.accounts?.some((entry) => entry.sub === holderId && !!entry.deleted_at) === true
+        && typeof feed.json?.cursor === 'string',
+      `HTTP ${feed.status} ${JSON.stringify(feed.json)}`);
+
+    const feedAfter = await feedOf({ ...openAssertion(), after: feed.json?.cursor });
+    check('com o cursor, a lista so traz o que veio depois',
+      feedAfter.status === 200 && feedAfter.json?.accounts?.length === 0 && feedAfter.json?.cursor === feed.json?.cursor,
+      `HTTP ${feedAfter.status} ${JSON.stringify(feedAfter.json)}`);
+
+    const foreignFeed = await feedOf(assertion());
+    check('outra aplicacao nao fica sabendo de conta que nunca usou ela',
+      foreignFeed.status === 200 && !foreignFeed.json?.accounts?.some((entry) => entry.sub === holderId),
+      `HTTP ${foreignFeed.status}`);
+
+    const badCursor = await feedOf({ ...openAssertion(), after: 'cursor-inventado' });
+    check('cursor que a lista nao gerou e recusado',
+      badCursor.status === 400 && badCursor.json?.error === 'invalid_request', `HTTP ${badCursor.status}`);
+
+    const testMessages = (await Promise.all([NEW_EMAIL, PASSWORD_EMAIL, GOOGLE_EMAIL, ACCOUNT_EMAIL].map(mailboxOf))).flat();
     if (testMessages.length) {
       await fetch(`${MAILPIT}/api/v1/messages`, {
         method: 'DELETE',

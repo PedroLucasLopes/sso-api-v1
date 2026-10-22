@@ -54,8 +54,56 @@ export class AccountSignup extends AccountPassword {
 }
 
 export class AccountLinkView {
-  purpose: 'signup' | 'password';
+  purpose: 'signup' | 'password' | 'delete';
   email: string;
   application: string;
   logo: string | null;
+}
+
+export class AccountMfaSetup {
+  @IsOptional()
+  @IsString()
+  @MaxLength(MAX_PASSWORD_LENGTH)
+  password?: string;
+}
+
+export class AccountDeletionRequest {
+  @IsOptional()
+  @IsIn(ACCOUNT_LOCALES)
+  locale?: string;
+}
+
+export class AccountProfileView {
+  name: string;
+  email: string;
+  password: boolean;
+  google: boolean;
+  applications: string[];
+  secondFactor: { enrolled: boolean; recoveryCodesLeft: number };
+  deletion: {
+    allowed: boolean;
+    reason: 'admin' | 'email_unavailable' | null;
+  };
+  csrfToken: string;
+}
+
+export class AccountMfaSetupView {
+  secret: string;
+  otpauth: string;
+}
+
+export class AccountMfaConfirmView {
+  recoveryCodes: string[];
+}
+
+export class AccountDeletionView {
+  next: 'check_email' | 'deleted';
+  email?: string;
+}
+
+export class AccountMfaPending {
+  userId: string;
+  sessionId: string;
+  secret: string;
+  createdAt: number;
 }

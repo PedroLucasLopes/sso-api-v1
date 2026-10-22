@@ -32,7 +32,11 @@ export class ProjectEntryService {
     project: ProjectAccessPolicy,
   ): Promise<ProjectEntry> {
     const membership = await this.membershipRole(userId, project.id);
-    const roleId = enteringRole(project, membership);
+    const roleId = enteringRole(
+      project,
+      membership,
+      !membership && (await this.blocked(userId, project.id)),
+    );
 
     return {
       roleId,
@@ -69,6 +73,14 @@ export class ProjectEntryService {
       return null;
     }
 
+    if (await this.blocked(userId, projectId)) {
+      this.logger.log(
+        `conta ${userId} foi tirada do projeto ${project.name} e nao volta pelo papel padrao`,
+      );
+
+      return null;
+    }
+
     await this.prisma.projectUser.createMany({
       data: [{ userId, projectId, roleId: project.defaultRoleId }],
       skipDuplicates: true,
@@ -91,5 +103,14 @@ export class ProjectEntryService {
     });
 
     return membership?.roleId ?? null;
+  }
+
+  private async blocked(userId: string, projectId: string): Promise<boolean> {
+    const block = await this.prisma.projectBlock.findUnique({
+      where: { userId_projectId: { userId, projectId } },
+      select: { userId: true },
+    });
+
+    return block !== null;
   }
 }

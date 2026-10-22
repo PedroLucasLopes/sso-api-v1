@@ -28,10 +28,11 @@ export function acceptsSignup(project: ProjectAccessPolicy): boolean {
 export function enteringRole(
   project: ProjectAccessPolicy,
   membershipRoleId: string | null,
+  blocked = false,
 ): string | null {
   if (membershipRoleId) return membershipRoleId;
 
-  return acceptsSignup(project) ? project.defaultRoleId : null;
+  return acceptsSignup(project) && !blocked ? project.defaultRoleId : null;
 }
 
 export function secondFactorOptional(

@@ -15,7 +15,9 @@ import { Public } from 'src/global/decorator/public.decorator';
 import { SameOriginGuard } from 'src/global/security/sameOrigin.guard';
 import { ACCOUNT_LINK_LIMIT } from '../account.constant';
 import { AccountService } from '../Service/account.service';
+import { AccountDeletionService } from '../Service/accountDeletion.service';
 import {
+  AccountDeletionView,
   AccountLinkToken,
   AccountLinkView,
   AccountPassword,
@@ -27,7 +29,10 @@ import { LoginStepView } from '../dto/loginStep.dto';
 @Public()
 @UseGuards(SameOriginGuard)
 export class AccountController {
-  constructor(private accounts: AccountService) {}
+  constructor(
+    private accounts: AccountService,
+    private deletions: AccountDeletionService,
+  ) {}
 
   @Post('link')
   @HttpCode(HttpStatus.OK)
@@ -58,5 +63,16 @@ export class AccountController {
     @Body() body: AccountPassword,
   ): Promise<LoginStepView> {
     return this.accounts.completePasswordReset(res, body);
+  }
+
+  @Post('delete')
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @Throttle(ACCOUNT_LINK_LIMIT)
+  async delete(
+    @Res({ passthrough: true }) res: Response,
+    @Body() body: AccountLinkToken,
+  ): Promise<AccountDeletionView> {
+    return this.deletions.complete(res, body);
   }
 }

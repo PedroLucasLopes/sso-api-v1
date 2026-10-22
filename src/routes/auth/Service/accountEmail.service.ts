@@ -5,6 +5,7 @@ import { AccountEmailKind } from 'generated/prisma/enums';
 import { PROJECT_ACCESS_POLICY_FIELDS } from 'src/global/access/projectPolicy';
 import { PrismaService } from 'src/global/prisma/prisma.service';
 import {
+  ACCOUNT_EMAIL_WINDOW_MINUTES,
   ACCOUNT_EMAILS_PER_HOUR,
   ACCOUNT_LINK_PATH,
   ACCOUNT_LINK_TOKEN_BYTES,
@@ -21,13 +22,24 @@ export interface AccountEmailContext {
 }
 
 type LinkKind =
-  typeof AccountEmailKind.SIGNUP | typeof AccountEmailKind.PASSWORD_RESET;
+  | typeof AccountEmailKind.SIGNUP
+  | typeof AccountEmailKind.PASSWORD_RESET
+  | typeof AccountEmailKind.ACCOUNT_DELETION;
+
+const LINK_KINDS: AccountEmailKind[] = [
+  AccountEmailKind.SIGNUP,
+  AccountEmailKind.PASSWORD_RESET,
+  AccountEmailKind.ACCOUNT_DELETION,
+];
 
 const QUOTA_KINDS: AccountEmailKind[] = [
   AccountEmailKind.SIGNUP,
   AccountEmailKind.PASSWORD_RESET,
   AccountEmailKind.ACCOUNT_EXISTS,
+  AccountEmailKind.ACCOUNT_DELETION,
 ];
+
+const WINDOW_MS = ACCOUNT_EMAIL_WINDOW_MINUTES * 60 * 1000;
 
 @Injectable()
 export class AccountEmailService {
@@ -48,11 +60,19 @@ export class AccountEmailService {
       where: {
         email,
         kind: { in: QUOTA_KINDS },
-        createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
+        createdAt: { gte: new Date(Date.now() - WINDOW_MS) },
       },
     });
 
     return sent < ACCOUNT_EMAILS_PER_HOUR;
+  }
+
+  async purgeStale(): Promise<number> {
+    const { count } = await this.prisma.accountEmail.deleteMany({
+      where: { createdAt: { lt: new Date(Date.now() - WINDOW_MS) } },
+    });
+
+    return count;
   }
 
   async issueLink(
@@ -119,9 +139,7 @@ export class AccountEmailService {
         tokenHash: this.hash(raw),
         consumedAt: null,
         expiresAt: { gt: new Date() },
-        kind: {
-          in: [AccountEmailKind.SIGNUP, AccountEmailKind.PASSWORD_RESET],
-        },
+        kind: { in: LINK_KINDS },
       },
       include: {
         project: {

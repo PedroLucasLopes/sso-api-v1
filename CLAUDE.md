@@ -51,22 +51,25 @@ Em container, `docker compose up -d --build` na raiz deste repositório, com a c
 está no `.env`. Cada aplicação sobe o próprio compose, no próprio repositório, e chega a este serviço
 pela porta da máquina, `host.docker.internal:8080`.
 
-`npm run test:oauth` sobe 228 asserções contra o servidor rodando: ordem dos erros do authorize,
+`npm run test:oauth` sobe 256 asserções contra o servidor rodando: ordem dos erros do authorize,
 formato dos erros do token endpoint, PKCE, autenticação de cliente, verificação do access token
 contra o JWKS, uso único do code, rotação de refresh token, revogação pelos dois tipos de token, a
 autorização administrativa vinda do banco, a raiz e o 404 de rota negada, papéis de nome livre, troca
 e remoção de membro, a tela de login do IdP, o login do console e a escrita pela sessão com CSRF, a
 exclusão de redirect URI, a proteção do projeto SSO, a exclusão de conta sem projeto, a
-introspecção, o contrato de erro por código e o cadastro aberto por projeto, com os links lidos no
-Mailpit. **Rode depois de qualquer mudança em `routes/auth/` ou em `global/access/`.** A seção do
+introspecção, o contrato de erro por código, o cadastro aberto por projeto, com os links lidos no
+Mailpit, o bloqueio de quem foi tirado de um projeto `OPEN` e a página da conta: segundo fator
+cadastrado depois, exclusão pela própria pessoa e a lista de contas excluídas que as aplicações leem.
+**Rode depois de qualquer mudança em `routes/auth/` ou em `global/access/`.** A seção do
 cadastro exige `SMTP_HOST` no `.env.docker` e o Mailpit de pé; sem eles, as duas primeiras
 asserções dela falham e dizem o que falta.
 
 `npx jest` roda os testes de unidade. Hoje cobrem a proteção do projeto SSO, inclusive a regra do
 último SUPERADMIN, que a suíte ponta a ponta não alcança sem rebaixar a raiz real do ambiente, os
 filtros do Prisma, que não podem deixar o texto dele chegar ao corpo da resposta, a política de
-senha escolhida pela pessoa, o Pwned Passwords, o Turnstile, a decisão do segundo fator, o logo do
-projeto e os e-mails de conta.
+senha escolhida pela pessoa, o Pwned Passwords, o Turnstile, a decisão do segundo fator e o bloqueio,
+o logo do projeto, os e-mails de conta, a limpeza das linhas vencidas e o cursor da lista de contas
+excluídas.
 
 A suíte ponta a ponta **só roda contra banco local** e recusa outro endereço antes de gravar qualquer
 coisa: ela cria operadores com papel no próprio SSO, papéis e rotas, e desfaz tudo no fim, inclusive
@@ -133,8 +136,9 @@ maiúscula** nas subpastas. (⚠️ o `krloc` usa minúsculas — divergência h
 
 ```
 User ──< ProjectUser >── Project ──< Route ──< Permission >── Role
-  │  └──< AuthSession           ├──< redirectUri
-  │          └──< RefreshToken  ├──< ClientKey
+  │  ├──< ProjectBlock >────────┤──< redirectUri
+  │  └──< AuthSession           ├──< ClientKey
+  │          └──< RefreshToken  ├──< DeletedAccount
   └──────< AccountEmail >───────┘   defaultRoleId ──> Role
 ```
 
@@ -142,7 +146,9 @@ User ──< ProjectUser >── Project ──< Route ──< Permission >─�
 |---|---|
 | `User` | `email` único; `authId` = id do Google, fixado no 1º login e conferido nos seguintes |
 | `Project` | uma aplicação cliente; `clientId` único de 32 bytes hex. **O próprio SSO é um deles**, de nome `SSO`. `signupPolicy` (`CLOSED` padrão, `OPEN`), `mfaPolicy` (`REQUIRED` padrão, `OPTIONAL`), `defaultRoleId` (FK com `SET NULL`), `displayName` e `logo` da tela de login |
-| `AccountEmail` | todo e-mail de conta que o SSO manda: link de cadastro, de senha nova, aviso de conta que já existe e de senha trocada. O link guarda só o SHA-256 do token. É também a conta da cota por endereço |
+| `AccountEmail` | todo e-mail de conta que o SSO manda: link de cadastro, de senha nova e de exclusão de conta, aviso de conta que já existe e de senha trocada. O link guarda só o SHA-256 do token. É também a conta da cota por endereço, e a limpeza apaga a linha passada a janela dela, de uma hora |
+| `ProjectBlock` | quem um administrador tirou de um projeto (fora o `SSO`). A entrada automática com o papel padrão de um projeto `OPEN` não devolve a pessoa; vincular de novo pelo console tira o bloqueio |
+| `DeletedAccount` | o `sub` de quem excluiu a própria conta, uma linha por projeto em que a pessoa estava ou estava bloqueada, para cada aplicação ler a sua lista e apagar o que guarda. Fica 90 dias |
 | `redirectUri` | lista branca de callbacks por projeto, único por `(projectId, redirectUri)` |
 | `Route` | `path` + `method` + `projectId`, único em conjunto |
 | `Role` | nome livre (maiúsculas, dígitos e `_`), único por `(name, projectId)`. Todo projeto nasce com SUPERADMIN, ADMIN, MANAGER e VIEWER, vazios |
@@ -474,8 +480,16 @@ conta com ele, o Google é vinculado a ela, como sempre foi. Em projeto `CLOSED`
 ### Quem já tem conta
 
 Conta que entra pela primeira vez num projeto `OPEN` ganha o papel padrão ao receber o code
-(`ProjectEntryService.enter`), com ou sem sessão aberta. ⚠️ Por isso **tirar alguém de um projeto `OPEN`
-não bloqueia**: no próximo login a pessoa volta com o papel padrão. Bloquear conta é pendência.
+(`ProjectEntryService.enter`), com ou sem sessão aberta.
+
+**Tirar alguém do projeto bloqueia.** Sem isso, a entrada automática desfaria a remoção no login
+seguinte. `DELETE /sso/projectuser/:projectId/:userId` grava uma linha em `ProjectBlock`, na mesma
+transação que apaga o vínculo e revoga os refresh tokens, e com ela a pessoa conta como sem papel: a tela
+de login segue o caminho de quem não tem papel (o segundo fator, e depois `access_denied` no
+`redirect_uri`), sem dizer antes da autenticação completa que existe um bloqueio. Vincular de novo,
+`POST /sso/projectuser`, tira o bloqueio na mesma transação; o console lista os bloqueados no overview
+do projeto (`blocked`) com a ação de readmitir. O bloqueio vale também em projeto `CLOSED`, onde não
+muda nada até o projeto abrir o cadastro; só o projeto `SSO`, que nunca abre, não grava bloqueio.
 
 ### O segundo fator opcional
 
@@ -496,7 +510,8 @@ que o exige:
 
 O padrão da coluna é `false`, de propósito: toda sessão de antes, e as que `test:oauth` e o
 `ssoTestHarness` do `sso-client` inserem por SQL, contam como sessões com segundo fator, e nada muda
-para elas. Não há tela de conta para cadastrar o TOTP depois; é pendência.
+para elas. Quem dispensou o código cadastra o TOTP depois pela página da conta (ver "A conta da
+pessoa", abaixo).
 
 ### E-mail e Turnstile
 
@@ -529,6 +544,47 @@ para elas. Não há tela de conta para cadastrar o TOTP depois; é pendência.
 
 `GET /sso/login/request` passou a trazer `logo`, `signup`, `passwordReset` e `humanCheck`
 (`{ provider, siteKey }`), e `application` é o nome de exibição quando houver.
+
+### A conta da pessoa
+
+A página `/account` da tela do IdP (no `plataforma_sso-v1`) é onde a pessoa cuida da própria conta. Ela
+não abre login: usa a sessão do SSO que a pessoa já tem por ter entrado numa aplicação, e sem sessão diz
+para entrar por uma delas e voltar. A aplicação manda a pessoa para `<origem do SSO_LOGIN_URL>/account`.
+Escrita pela página exige o `X-CSRF-Token` que `GET /sso/account/profile` devolve, o `Origin` da tela de
+login e JSON, como o resto das rotas de conta.
+
+- **Segundo fator depois.** Quem entrou sem ele num projeto `OPTIONAL` cadastra o TOTP ali:
+  `POST /sso/account/mfa/setup` devolve segredo e `otpauth://`, guardados num cookie cifrado de 10
+  minutos amarrado à pessoa e à sessão, e `POST /sso/account/mfa/confirm` confere o código, grava,
+  devolve os oito códigos de recuperação e promove a sessão (`singleFactor` vira `false`). **Conta com
+  senha confirma a senha atual antes** (`current_password_invalid`; erros contam para o bloqueio por
+  tentativas): a sessão sozinha vale até 90 dias, e quem a roubasse prenderia a conta num aplicativo
+  dele. Conta só com Google não tem senha a pedir e segue só com a sessão. Quem já tem o TOTP recebe
+  `mfa_already_enrolled`; trocar o aplicativo continua sendo o reset pelo administrador.
+- **Exclusão pela própria pessoa (LGPD).** `POST /sso/account/deletion` manda um link de exclusão ao
+  e-mail da conta (`ACCOUNT_DELETION`, 30 minutos, uso único, dentro da cota de 3 por hora, que aqui
+  responde `account_email_quota` em vez de fingir que mandou, porque quem pede já está autenticado).
+  Nada é apagado sem o link: a sessão sozinha não exclui conta. `POST /sso/account/link` mostra o
+  pedido (`purpose: "delete"`) e `POST /sso/account/delete` apaga, numa transação com a pessoa travada:
+  codes, refresh tokens, sessões, vínculos, os e-mails de conta do endereço e a pessoa, com senha, TOTP e
+  bloqueios por cascata. **Conta com papel no projeto `SSO` não se exclui** (`account_deletion_admin`):
+  é a raiz quem tira a gestão, e a regra do último `SUPERADMIN` continua de pé. Sem `SMTP_HOST`, a
+  exclusão não é oferecida (`deletion.reason: "email_unavailable"`).
+- **As aplicações ficam sabendo.** A exclusão grava o `sub` em `DeletedAccount`, uma linha por projeto
+  em que a pessoa estava ou estava bloqueada, e cada aplicação lê a sua lista em
+  `POST /sso/oauth/deleted-accounts`, com `private_key_jwt` como as outras rotas de cliente e anunciada
+  no discovery (`deleted_accounts_endpoint`). A resposta é `{ accounts: [{ sub, deleted_at }], cursor,
+  has_more }`, em ordem, até 500 por página; a aplicação guarda o `cursor` e manda de volta em `after`.
+  Aplicação só vê conta que passou por ela. As linhas ficam 90 dias: quem lê menos que isso perde aviso.
+
+### Limpeza das linhas vencidas
+
+`MaintenanceService` roda na subida e a cada 15 minutos, sem dependência nova (`setInterval` com
+`unref`, uma rodada por vez): apaga as linhas de `AccountEmail` passada a janela da cota, de uma hora
+(o link vale 30 minutos), os authorization codes vencidos há mais de uma hora, as sessões vencidas há
+mais de um dia com os codes e refresh tokens delas, e as linhas de `DeletedAccount` com mais de 90 dias.
+Com várias instâncias, todas limpam: as exclusões são idempotentes. Falha vai para o log e a próxima
+rodada tenta de novo.
 
 ---
 
@@ -656,13 +712,15 @@ as outras aplicações.
 | GET | `/sso/.well-known/jwks.json` | público |
 | GET | `/sso/.well-known/oauth-authorization-server` | público |
 | GET | `/sso/oauth/authorize` · `/sso/oauth/google` · `/sso/oauth/google/callback` | público |
-| POST | `/sso/oauth/token` · `/sso/oauth/revoke` · `/sso/oauth/permissions` · `/sso/oauth/introspect` | público, exige `private_key_jwt` |
+| POST | `/sso/oauth/token` · `/sso/oauth/revoke` · `/sso/oauth/permissions` · `/sso/oauth/introspect` · `/sso/oauth/deleted-accounts` | público, exige `private_key_jwt` |
 | POST | `/sso/oauth/logout` | público |
 | GET | `/sso/login/request` | público, o pedido pendente e a etapa em que a pessoa está |
 | POST | `/sso/login/password` · `/sso/login/password/change` | público, com pedido pendente: primeiro fator e troca no primeiro acesso |
 | POST | `/sso/login/mfa/setup` · `/sso/login/mfa/confirm` · `/sso/login/mfa` | público, com etapa aberta: cadastro e conferência do segundo fator |
 | POST | `/sso/login/signup` · `/sso/login/password/reset` | público, com pedido pendente de projeto `OPEN`, Turnstile e JSON da própria origem: manda o link por e-mail |
-| POST | `/sso/account/link` · `/sso/account/signup` · `/sso/account/password` | público, com o token do link e JSON da própria origem: cria a conta ou troca a senha |
+| POST | `/sso/account/link` · `/sso/account/signup` · `/sso/account/password` · `/sso/account/delete` | público, com o token do link e JSON da própria origem: cria a conta, troca a senha ou exclui a conta |
+| GET | `/sso/account/profile` | público, com a sessão do SSO: a página da conta e o `csrfToken` dela |
+| POST | `/sso/account/mfa/setup` · `/sso/account/mfa/confirm` · `/sso/account/deletion` | público, com a sessão, `X-CSRF-Token` e JSON da própria origem: segundo fator depois e pedido de exclusão |
 | GET | `/sso/session` · `/sso/session/login` | público: estado da sessão e login do console |
 | POST | `/sso/session/logout` | público, exige `X-CSRF-Token` |
 | GET | `/sso/me` | autenticado, sem RBAC; devolve o `csrfToken` para quem veio pela sessão |
@@ -786,20 +844,26 @@ por teste em `test/oauth-e2e.js`.
 4. **`PaginationConfig`**: piso 10 e teto 500 (`MAX_LIMIT`). O teto entrou na revisão de segurança:
    sem ele, `?limit=1000000` devolvia o catálogo inteiro numa resposta.
 5. **`getProjecIdByClientId`** — typo, no `ProjectService`.
-6. **Não há rotina agendada** chamando `purgeExpired()` de `AuthorizationCodeService` e
-   `AuthSessionService`. As linhas expiradas acumulam. O método da sessão já apaga os dependentes
-   antes, então a rotina, quando existir, não vai esbarrar na chave estrangeira.
-7. **Não há trilha de auditoria** das ações administrativas: as tabelas guardam o estado, não quem o
+6. **Não há trilha de auditoria** das ações administrativas: as tabelas guardam o estado, não quem o
    mudou. É o item de maior prioridade no `PENTEST.md`.
-8. **Rota administrativa nova não entra sozinha no catálogo do SSO.** A raiz a alcança no mesmo
+7. **Rota administrativa nova não entra sozinha no catálogo do SSO.** A raiz a alcança no mesmo
    deploy; os papéis de gestão, só depois que ela for cadastrada no projeto `SSO` e concedida a eles.
    Até lá eles recebem 404. Falha fechado, que é o lado certo de errar.
-9. **Cadastro aberto: o que ainda falta.** Tirar alguém de projeto `OPEN` não bloqueia (volta com o
-   papel padrão no próximo login); não há tela de conta para cadastrar o TOTP depois, no `OPTIONAL`;
-   a pessoa não exclui a própria conta (LGPD), nem as aplicações são avisadas; e nada apaga as linhas
-   vencidas de `AccountEmail`, que guardam e-mail de quem pediu cadastro e não terminou.
+8. **A lista de contas excluídas ainda não tem leitor.** O `sso-client` não traz a chamada a
+   `POST /oauth/deleted-accounts`, e nenhuma aplicação a lê ainda; o Meet Me é o primeiro que precisa,
+   para apagar as viagens de quem saiu. Quem não ler em 90 dias perde o aviso.
 
 ### ✅ Já corrigidos
+
+- **Cadastro aberto: o que faltava.** Tirar alguém de um projeto `OPEN` não bloqueava, e a pessoa
+  voltava com o papel padrão no login seguinte: agora a remoção grava `ProjectBlock` (ver "Quem já tem
+  conta"). Não havia onde cadastrar o TOTP depois nem como a pessoa excluir a própria conta: a página
+  da conta faz as duas coisas, e as aplicações leem quem saiu em `POST /oauth/deleted-accounts` (ver "A
+  conta da pessoa"). E nada apagava as linhas vencidas de `AccountEmail`, com o e-mail de quem pediu
+  cadastro e não terminou.
+- **Não havia rotina agendada** para `purgeExpired()` de `AuthorizationCodeService` e
+  `AuthSessionService`, e as linhas vencidas acumulavam. `MaintenanceService` roda as duas, a de
+  `AccountEmail` e a de `DeletedAccount` a cada 15 minutos (ver "Limpeza das linhas vencidas").
 
 - **O console reconhecia o erro pela frase**, e o texto desconhecido aparecia cru na tela. Agora todo
   erro sai com código (ver "Contrato de erro"). Junto saíram do corpo o texto interno do Prisma, o nome
@@ -921,6 +985,13 @@ por teste em `test/oauth-e2e.js`.
   `OPTIONAL`, para quem não tem papel no SSO; sessão `singleFactor` nunca abre projeto, papel ou console
   que o exige, e `AuthSession.singleFactor` nasce `false`.
 - Escrita administrativa pela sessão exige `X-CSRF-Token` e origem do console. Não afrouxe.
+- Tirar alguém de um projeto grava o bloqueio, e só vincular de novo o tira: a entrada automática do
+  projeto `OPEN` nunca devolve quem um administrador tirou.
+- A página da conta só usa a sessão que já existe, e escrita nela exige `X-CSRF-Token`, origem da tela
+  de login e JSON. Cadastrar o TOTP por ela pede a senha atual de quem tem senha.
+- Conta só se exclui pelo link mandado ao e-mail dela, nunca pela sessão sozinha, e conta com papel no
+  projeto `SSO` não se exclui pela página. A exclusão leva tudo da pessoa numa transação e deixa só o
+  `sub` em `DeletedAccount`, e cada aplicação só lê os `sub` de quem passou por ela.
 - Nada aqui lê arquivo de outro repositório.
 - O projeto `SSO` não se apaga, não se renomeia e não sai de `ACTIVE`; o catálogo, os membros, as
   redirect URIs e as chaves dele só a raiz mexe; o papel `SUPERADMIN` dele não se renomeia nem se

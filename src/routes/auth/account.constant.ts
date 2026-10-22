@@ -8,6 +8,22 @@ export const ACCOUNT_TOKEN_MAX_LENGTH = 128;
 
 export const ACCOUNT_EMAILS_PER_HOUR = 3;
 
+export const ACCOUNT_EMAIL_WINDOW_MINUTES = 60;
+
+export const ACCOUNT_PAGE_PATH = '/account';
+
+export const ACCOUNT_MFA_COOKIE = 'sso_account_mfa';
+
+export const ACCOUNT_MFA_TTL_SECONDS = 600;
+
+export const DELETED_ACCOUNT_RETENTION_DAYS = 90;
+
+export const DELETED_ACCOUNTS_PAGE_SIZE = 500;
+
+export const DELETED_ACCOUNTS_CURSOR_MAX_LENGTH = 200;
+
+export const MAINTENANCE_INTERVAL_MINUTES = 15;
+
 export const ACCOUNT_NAME_LENGTH = { min: 2, max: 100 } as const;
 
 export const ACCOUNT_EMAIL_MAX_LENGTH = 254;

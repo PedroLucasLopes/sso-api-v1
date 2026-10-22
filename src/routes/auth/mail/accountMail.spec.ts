@@ -49,4 +49,30 @@ describe('e-mails de conta', () => {
     expect(mail.subject).toBe('Tu contraseña de Meet Me cambió');
     expect(mail.html).not.toContain('href=');
   });
+
+  it('o pedido de exclusao leva o link de confirmar nas tres linguas', () => {
+    const subjects = (['pt-BR', 'en', 'es'] as const).map((locale) => {
+      const mail = composeAccountMail({
+        to: 'ana@exemplo.com',
+        template: 'deletion',
+        locale,
+        application: 'SSO',
+        link: 'http://localhost:5173/link#token=abc',
+        validityMinutes: 30,
+      });
+
+      expect(mail.html).toContain(
+        'href="http://localhost:5173/link#token=abc"',
+      );
+      expect(mail.text).toContain('http://localhost:5173/link#token=abc');
+
+      return mail.subject;
+    });
+
+    expect(subjects).toEqual([
+      'Confirme a exclusão da sua conta no SSO',
+      'Confirm the deletion of your SSO account',
+      'Confirma la eliminación de tu cuenta en SSO',
+    ]);
+  });
 });

@@ -52,6 +52,14 @@ describe('politica de cadastro e de segundo fator do projeto', () => {
     ).toBeNull();
   });
 
+  it('quem foi tirado do projeto nao volta sozinho com o papel padrao', () => {
+    expect(enteringRole(project(), null, true)).toBeNull();
+  });
+
+  it('o bloqueio nao pesa sobre quem foi vinculado de novo', () => {
+    expect(enteringRole(project(), CURATOR, true)).toBe(CURATOR);
+  });
+
   it('o segundo fator so e opcional para o papel padrao de um projeto OPTIONAL', () => {
     expect(secondFactorOptional(project(), TRAVELER)).toBe(true);
     expect(secondFactorOptional(project(), CURATOR)).toBe(false);

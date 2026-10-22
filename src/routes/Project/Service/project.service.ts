@@ -208,6 +208,10 @@ export class ProjectService {
             role: { include: { _count: { select: { permissions: true } } } },
           },
         },
+        blocks: {
+          include: { user: { select: { id: true, name: true, email: true } } },
+          orderBy: { createdAt: 'desc' },
+        },
       },
     });
 
@@ -260,6 +264,12 @@ export class ProjectService {
         email: pu.user.email,
         role: pu.role.name,
         grantedRoutes: pu.role._count.permissions,
+      })),
+      blocked: project.blocks.map((block) => ({
+        id: block.user.id,
+        name: block.user.name,
+        email: block.user.email,
+        blockedAt: block.createdAt,
       })),
     };
   }

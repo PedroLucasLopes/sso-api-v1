@@ -98,6 +98,26 @@ export const API_ERRORS = {
     status: HttpStatus.UNSUPPORTED_MEDIA_TYPE,
     message: 'This route only accepts application/json',
   },
+  account_email_quota: {
+    status: HttpStatus.TOO_MANY_REQUESTS,
+    message: 'Too many account e-mails for this address in the last hour',
+  },
+  account_deletion_admin: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Accounts with a role in the SSO console are deleted by the root',
+  },
+  current_password_invalid: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'The current password was refused',
+  },
+  mfa_already_enrolled: {
+    status: HttpStatus.CONFLICT,
+    message: 'The second factor is already set up for this account',
+  },
+  mfa_setup_expired: {
+    status: HttpStatus.GONE,
+    message: 'The second factor setup expired; start again',
+  },
 
   invalid_credentials: {
     status: HttpStatus.UNAUTHORIZED,

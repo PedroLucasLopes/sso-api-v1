@@ -18,6 +18,7 @@ model User {
   password      UserPassword?
   mfa           UserMfa?
   accountEmails AccountEmail[]
+  projectBlocks ProjectBlock[]
 }
 
 /// Uma aplicacao cliente.
@@ -27,25 +28,27 @@ model User {
 /// banco nao basta. Suspender corta o acesso da aplicacao inteira na hora, sem
 /// precisar apagar cadastro nem revogar chave uma a uma.
 model Project {
-  id            String         @id @default(uuid())
-  name          String         @unique
-  clientId      String         @unique
-  status        ProjectStatus  @default(PENDING)
-  signupPolicy  SignupPolicy   @default(CLOSED)
-  mfaPolicy     MfaPolicy      @default(REQUIRED)
-  defaultRoleId String?
-  displayName   String?
-  logo          String?
-  createdAt     DateTime       @default(now())
-  activatedAt   DateTime?
-  suspendedAt   DateTime?
-  clientKeys    ClientKey[]
-  projectUsers  ProjectUser[]
-  redirectUris  redirectUri[]
-  roles         Role[]         @relation("ProjectRoles")
-  routes        Route[]
-  defaultRole   Role?          @relation("ProjectDefaultRole", fields: [defaultRoleId], references: [id], onDelete: SetNull)
-  accountEmails AccountEmail[]
+  id              String           @id @default(uuid())
+  name            String           @unique
+  clientId        String           @unique
+  status          ProjectStatus    @default(PENDING)
+  signupPolicy    SignupPolicy     @default(CLOSED)
+  mfaPolicy       MfaPolicy        @default(REQUIRED)
+  defaultRoleId   String?
+  displayName     String?
+  logo            String?
+  createdAt       DateTime         @default(now())
+  activatedAt     DateTime?
+  suspendedAt     DateTime?
+  clientKeys      ClientKey[]
+  projectUsers    ProjectUser[]
+  redirectUris    redirectUri[]
+  roles           Role[]           @relation("ProjectRoles")
+  routes          Route[]
+  defaultRole     Role?            @relation("ProjectDefaultRole", fields: [defaultRoleId], references: [id], onDelete: SetNull)
+  accountEmails   AccountEmail[]
+  blocks          ProjectBlock[]
+  deletedAccounts DeletedAccount[]
 
   @@index([status])
 }
@@ -113,6 +116,29 @@ model ProjectUser {
 
   @@id([userId, projectId])
   @@index([projectId, roleId])
+}
+
+model ProjectBlock {
+  userId    String
+  projectId String
+  createdAt DateTime
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([userId, projectId])
+  @@index([projectId])
+}
+
+model DeletedAccount {
+  id        String   @id @default(uuid())
+  subject   String
+  projectId String
+  deletedAt DateTime
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, subject])
+  @@index([projectId, deletedAt, id])
+  @@index([deletedAt])
 }
 
 /// Chaves de assinatura do proprio Authorization Server (RS256).
@@ -245,6 +271,7 @@ enum AccountEmailKind {
   PASSWORD_RESET
   ACCOUNT_EXISTS
   PASSWORD_CHANGED
+  ACCOUNT_DELETION
 }
 
 model AccountEmail {

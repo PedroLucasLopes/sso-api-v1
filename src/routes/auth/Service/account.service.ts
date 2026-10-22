@@ -102,12 +102,37 @@ export class AccountService {
       throw new ApiException('link_invalid');
     }
 
+    if (
+      link.kind === AccountEmailKind.ACCOUNT_DELETION &&
+      !(await this.ownerExists(link.userId))
+    ) {
+      throw new ApiException('link_invalid');
+    }
+
     return {
-      purpose: link.kind === AccountEmailKind.SIGNUP ? 'signup' : 'password',
+      purpose: this.linkPurpose(link.kind),
       email: link.email,
       application: this.applicationName(link.project),
       logo: link.project.logo,
     };
+  }
+
+  private linkPurpose(kind: AccountEmailKind): AccountLinkView['purpose'] {
+    if (kind === AccountEmailKind.SIGNUP) return 'signup';
+    if (kind === AccountEmailKind.ACCOUNT_DELETION) return 'delete';
+
+    return 'password';
+  }
+
+  private async ownerExists(userId: string | null): Promise<boolean> {
+    if (!userId) return false;
+
+    const owner = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+
+    return owner !== null;
   }
 
   async completeSignup(

@@ -73,4 +73,11 @@ export class ProjectOverview {
     role: string;
     grantedRoutes: number;
   }>;
+
+  blocked: Array<{
+    id: string;
+    name: string;
+    email: string;
+    blockedAt: Date;
+  }>;
 }
