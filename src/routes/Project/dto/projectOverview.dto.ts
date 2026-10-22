@@ -1,10 +1,30 @@
-import { IsEnum, IsNotEmpty } from 'class-validator';
-import { ProjectStatus } from 'generated/prisma/enums';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
+import { MfaPolicy, ProjectStatus, SignupPolicy } from 'generated/prisma/enums';
 
 export class SetProjectStatus {
   @IsEnum(ProjectStatus)
   @IsNotEmpty()
   status: ProjectStatus;
+}
+
+export class SetProjectPolicy {
+  @IsEnum(SignupPolicy)
+  signupPolicy: SignupPolicy;
+
+  @IsEnum(MfaPolicy)
+  mfaPolicy: MfaPolicy;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  defaultRoleId?: string | null;
 }
 
 export class ProjectOverview {
@@ -15,6 +35,12 @@ export class ProjectOverview {
   createdAt: Date;
   activatedAt: Date | null;
   suspendedAt: Date | null;
+
+  signupPolicy: SignupPolicy;
+  mfaPolicy: MfaPolicy;
+  defaultRoleId: string | null;
+  displayName: string | null;
+  logo: string | null;
 
   redirectUris: string[];
 
@@ -46,5 +72,12 @@ export class ProjectOverview {
     email: string;
     role: string;
     grantedRoutes: number;
+  }>;
+
+  blocked: Array<{
+    id: string;
+    name: string;
+    email: string;
+    blockedAt: Date;
   }>;
 }

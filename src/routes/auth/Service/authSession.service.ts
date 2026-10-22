@@ -30,13 +30,30 @@ export class AuthSessionService {
     return this.ttlSeconds;
   }
 
-  async create(userId: string): Promise<AuthSession> {
+  async create(userId: string, singleFactor = false): Promise<AuthSession> {
     return this.prisma.authSession.create({
       data: {
         userId,
+        singleFactor,
         expiresAt: new Date(Date.now() + this.ttlSeconds * 1000),
       },
     });
+  }
+
+  async promote(id: string, userId: string): Promise<AuthSession | null> {
+    const { count } = await this.prisma.authSession.updateMany({
+      where: {
+        id,
+        userId,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      data: { singleFactor: false, lastSeenAt: new Date() },
+    });
+
+    if (count !== 1) return null;
+
+    return this.prisma.authSession.findUnique({ where: { id } });
   }
 
   async findValid(id: string): Promise<AuthSession | null> {

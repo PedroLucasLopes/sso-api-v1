@@ -1,23 +1,30 @@
 import { Injectable } from '@nestjs/common';
 import { Project } from 'generated/prisma/client';
-import { ProjectStatus } from 'generated/prisma/enums';
-import { ProjectOverview } from '../dto/projectOverview.dto';
+import { MfaPolicy, ProjectStatus, SignupPolicy } from 'generated/prisma/enums';
+import { ProjectOverview, SetProjectPolicy } from '../dto/projectOverview.dto';
 import { PaginationConfig } from 'src/global/pagination/pagination';
 import { PrismaService } from 'src/global/prisma/prisma.service';
 import { SSO_SELF_PROJECT_NAME } from 'src/global/constants/selfProject.constant';
 import { DEFAULT_ROLE_NAMES } from 'src/global/constants/defaultRoles.constant';
-import { selfProjectProtected } from 'src/global/access/selfProjectProtection';
+import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
+import {
+  assertSelfProjectPolicy,
+  selfProjectProtected,
+} from 'src/global/access/selfProjectProtection';
 import { CreateProject } from '../dto/createProject.dto';
 import { FilterProject } from '../dto/filterProject.dto';
 import { EditProject } from '../dto/editProject.dto';
+import { logoProblem } from '../logo';
 import * as crypto from 'node:crypto';
 import { ApiException } from 'src/global/error/apiError';
+
+export type ProjectListing = Omit<Project, 'logo'>;
 
 @Injectable()
 export class ProjectService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll(filter: FilterProject): Promise<Project[]> {
+  async findAll(filter: FilterProject): Promise<ProjectListing[]> {
     const { page, limit } = PaginationConfig(filter);
     const projects = await this.prisma.project.findMany({
       where: {
@@ -31,6 +38,7 @@ export class ProjectService {
       include: {
         projectUsers: true,
       },
+      omit: { logo: true },
       skip: page,
       take: limit,
     });
@@ -77,12 +85,74 @@ export class ProjectService {
       );
     }
 
+    const displayName =
+      data.displayName === undefined
+        ? undefined
+        : data.displayName?.trim() || null;
+
+    const logo = data.logo === undefined ? undefined : data.logo || null;
+
+    if (logo) {
+      const problem = logoProblem(logo);
+
+      if (problem) throw new ApiException(problem);
+    }
+
     const editProject = await this.prisma.project.update({
       where: { id },
-      data,
+      data: { name: data.name, displayName, logo },
     });
 
     return editProject;
+  }
+
+  async setPolicy(
+    id: string,
+    data: SetProjectPolicy,
+    admin: AdminIdentity,
+  ): Promise<Project> {
+    if (!admin.root) {
+      throw new ApiException('project_policy_root_only');
+    }
+
+    const project = await this.prisma.project.findUnique({ where: { id } });
+
+    if (!project) {
+      throw new ApiException('project_not_found');
+    }
+
+    const policy = {
+      signupPolicy: data.signupPolicy,
+      mfaPolicy: data.mfaPolicy,
+      defaultRoleId: data.defaultRoleId ?? null,
+    };
+
+    assertSelfProjectPolicy(project, policy);
+
+    const needsDefaultRole =
+      policy.signupPolicy === SignupPolicy.OPEN ||
+      policy.mfaPolicy === MfaPolicy.OPTIONAL;
+
+    if (needsDefaultRole && !policy.defaultRoleId) {
+      throw new ApiException('default_role_required');
+    }
+
+    if (policy.defaultRoleId) {
+      const role = await this.prisma.role.findUnique({
+        where: { id: policy.defaultRoleId },
+        select: { projectId: true },
+      });
+
+      if (!role) {
+        throw new ApiException('role_not_found');
+      }
+
+      if (role.projectId !== id) {
+        throw new ApiException('role_not_in_project');
+      }
+    }
+
+    return this.prisma.project.update({ where: { id }, data: policy });
   }
 
   async setStatus(id: string, status: ProjectStatus): Promise<Project> {
@@ -138,6 +208,10 @@ export class ProjectService {
             role: { include: { _count: { select: { permissions: true } } } },
           },
         },
+        blocks: {
+          include: { user: { select: { id: true, name: true, email: true } } },
+          orderBy: { createdAt: 'desc' },
+        },
       },
     });
 
@@ -153,6 +227,11 @@ export class ProjectService {
       createdAt: project.createdAt,
       activatedAt: project.activatedAt,
       suspendedAt: project.suspendedAt,
+      signupPolicy: project.signupPolicy,
+      mfaPolicy: project.mfaPolicy,
+      defaultRoleId: project.defaultRoleId,
+      displayName: project.displayName,
+      logo: project.logo,
       redirectUris: project.redirectUris.map((r) => r.redirectUri),
       redirectUriRecords: project.redirectUris.map((r) => ({
         id: r.id,
@@ -185,6 +264,12 @@ export class ProjectService {
         email: pu.user.email,
         role: pu.role.name,
         grantedRoutes: pu.role._count.permissions,
+      })),
+      blocked: project.blocks.map((block) => ({
+        id: block.user.id,
+        name: block.user.name,
+        email: block.user.email,
+        blockedAt: block.createdAt,
       })),
     };
   }
