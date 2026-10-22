@@ -1,15 +1,7 @@
-import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
-
 export class GoogleUser {
-  @IsString()
-  @IsNotEmpty()
-  userId: string;
-
-  @IsEmail()
-  @IsNotEmpty()
+  userId: string | null;
+  googleId: string;
   email: string;
-
-  @IsString()
-  @IsNotEmpty()
   name: string;
+  emailVerified: boolean | undefined;
 }

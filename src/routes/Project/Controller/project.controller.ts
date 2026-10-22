@@ -11,12 +11,18 @@ import {
   Put,
   Query,
 } from '@nestjs/common';
-import { ProjectService } from '../Service/project.service';
+import { ProjectListing, ProjectService } from '../Service/project.service';
 import { FilterProject } from '../dto/filterProject.dto';
 import { Project } from 'generated/prisma/client';
+import { AdminIdentity } from 'src/global/access/adminIdentity.dto';
+import { CurrentAdmin } from 'src/global/decorator/currentAdmin.decorator';
 import { CreateProject } from '../dto/createProject.dto';
 import { EditProject } from '../dto/editProject.dto';
-import { ProjectOverview, SetProjectStatus } from '../dto/projectOverview.dto';
+import {
+  ProjectOverview,
+  SetProjectPolicy,
+  SetProjectStatus,
+} from '../dto/projectOverview.dto';
 
 @Controller('project')
 export class ProjectController {
@@ -24,7 +30,7 @@ export class ProjectController {
 
   @Get()
   @HttpCode(HttpStatus.OK)
-  async findAll(@Query() filter: FilterProject): Promise<Project[]> {
+  async findAll(@Query() filter: FilterProject): Promise<ProjectListing[]> {
     return await this.projectService.findAll(filter);
   }
 
@@ -47,6 +53,16 @@ export class ProjectController {
     @Body() data: SetProjectStatus,
   ): Promise<Project> {
     return await this.projectService.setStatus(id, data.status);
+  }
+
+  @Patch(':id/policy')
+  @HttpCode(HttpStatus.OK)
+  async setPolicy(
+    @Param('id') id: string,
+    @Body() data: SetProjectPolicy,
+    @CurrentAdmin() admin: AdminIdentity,
+  ): Promise<Project> {
+    return await this.projectService.setPolicy(id, data, admin);
   }
 
   @Post()

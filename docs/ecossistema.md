@@ -86,12 +86,30 @@ O login deixou de ser só o Google. Cada pessoa entra com **e-mail e senha emiti
 Google se a conta já estiver vinculada, e nos dois casos há **segundo fator por aplicativo** (TOTP,
 RFC 6238), que ela cadastra no primeiro acesso.
 
-- **Ninguém cria acesso por conta própria.** A conta nasce no console e a senha é emitida por um
-  administrador, aparece uma vez e é trocada pela pessoa no primeiro acesso.
+- **Em projeto `CLOSED`, o padrão, ninguém cria acesso por conta própria.** A conta nasce no console e
+  a senha é emitida por um administrador, aparece uma vez e é trocada pela pessoa no primeiro acesso.
 - **A senha é coletada pela tela do IdP**, na origem do SSO. A aplicação nunca vê senha, e o grant de
   senha do OAuth não existe no servidor (RFC 9700 §2.4).
 - **Perder o aplicativo é operação de administrador**: resetar o segundo fator no console. Há oito
   códigos de recuperação, de uso único, entregues uma vez no cadastro.
+
+### Cadastro aberto, por projeto
+
+Aplicação de consumo, como o Meet Me, abre o cadastro no próprio projeto, sem mudar nada para as
+outras. A raiz, e só ela, marca no console, na aba "Cadastro e segurança" do projeto:
+
+- **`OPEN`**, com um **papel padrão**: a tela do IdP oferece "Criar conta" e "Esqueci a senha" só para
+  pedidos desse projeto. A pessoa informa o e-mail, recebe um link e só então escolhe nome e senha; o
+  Google sem conta também cria a conta. Quem já tem conta em outro projeto entra com o papel padrão.
+- **`OPTIONAL`**: o segundo fator fica opcional só para o papel padrão. Qualquer outro papel e quem tem
+  papel no SSO continuam obrigados, e uma sessão aberta sem ele não entra em projeto que o exige: a tela
+  pede só o código.
+- **Nome de exibição e logo** do projeto aparecem na tela de login, para a pessoa não sair da marca da
+  aplicação.
+
+O SSO precisa de SMTP para isso (sem ele, nenhum projeto oferece cadastro), e o projeto `SSO` nunca
+abre. A aplicação não muda nada: continua `SsoClientModule.forRootFromEnv()`, e a conta nova chega
+pelo mesmo callback, com o papel padrão.
 
 O detalhe de cada etapa, o bloqueio por tentativas e as rotas estão no
 [`CLAUDE.md` do SSO](https://github.com/PedroLucasLopes/sso-api-v1/blob/main/CLAUDE.md).
@@ -421,9 +439,16 @@ RFCs: 6749 (core), 7009 (revogação), 7523 (client assertion), 7636 (PKCE), 766
     de equipamento e coluna de planilha gravada sem filtro; nos fronts, o nginx de uma linha sem
     manutenção; nas bibliotecas, a publicação com action por tag. Tudo corrigido, e cada repositório
     ganhou pipeline no GitHub Actions. Ver "CI/CD".
+29. **Cadastro aberto por projeto.** `signupPolicy`, `mfaPolicy` e papel padrão em cada projeto, com
+    o padrão de antes (`CLOSED`, `REQUIRED`) para todos: KRLoc e o console não mudaram. Projeto `OPEN`
+    aceita cadastro na tela do IdP, com o e-mail primeiro, link por e-mail, senha escolhida pela pessoa
+    com as regras do Mixtape e o Pwned Passwords, Turnstile e resposta igual exista o e-mail ou não;
+    senha nova por link; Google sem conta vira cadastro. O segundo fator opcional vale só para o papel
+    padrão, e sessão sem ele faz step-up para entrar no que o exige. Nome e logo do projeto na tela.
 
-Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 174 asserções, e `npx jest` para
-as regras de proteção e os filtros de erro) e `test/sso-e2e.js` do `krloc-api-v1` (`npm run test:sso`,
+Testes: `test/oauth-e2e.js` deste repositório (`npm run test:oauth`, 228 asserções, e `npx jest` para
+as regras de proteção, os filtros de erro, a política de senha, o Turnstile e a decisão do segundo
+fator) e `test/sso-e2e.js` do `krloc-api-v1` (`npm run test:sso`,
 94 asserções, e `npx jest` para a cobrança pelas cláusulas do contrato e o contrato de erro). As
 duas suítes ponta a ponta rodam contra a stack de pé, criam o que precisam e desfazem tudo no fim,
 inclusive quando quebram no meio.

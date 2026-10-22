@@ -17,7 +17,13 @@ import { Request, Response } from 'express';
 import { Public } from 'src/global/decorator/public.decorator';
 import { GoogleAuthGuard } from 'src/global/guards/googleAuth.guard';
 import { AuthService } from '../Service/auth.service';
+import { ClientAuthService } from '../Service/clientAuth.service';
+import { DeletedAccountService } from '../Service/deletedAccount.service';
 import { Authorize } from '../dto/authorize.dto';
+import {
+  DeletedAccountsRequest,
+  DeletedAccountsResponse,
+} from '../dto/deletedAccounts.dto';
 import { GoogleUser } from '../dto/googleUser';
 import { Introspect, IntrospectionResponse } from '../dto/introspect.dto';
 import { PermissionSet, ResolvePermissions } from '../dto/permissionSet.dto';
@@ -40,7 +46,11 @@ import {
   OAuthValidationFilter,
 )
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(
+    private authService: AuthService,
+    private clientAuth: ClientAuthService,
+    private deletedAccounts: DeletedAccountService,
+  ) {}
 
   @Get('authorize')
   async authorize(
@@ -94,6 +104,17 @@ export class AuthController {
   @Header('Cache-Control', 'no-store')
   async introspect(@Body() body: Introspect): Promise<IntrospectionResponse> {
     return this.authService.introspect(body);
+  }
+
+  @Post('deleted-accounts')
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  async deletedAccountsFeed(
+    @Body() body: DeletedAccountsRequest,
+  ): Promise<DeletedAccountsResponse> {
+    const project = await this.clientAuth.authenticate(body);
+
+    return this.deletedAccounts.since(project.id, body.after);
   }
 
   @Post('logout')

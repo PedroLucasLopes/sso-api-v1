@@ -7,6 +7,7 @@ export class AuthorizationServerMetadata {
   introspection_endpoint: string;
   introspection_endpoint_auth_methods_supported: string[];
   permissions_endpoint: string;
+  deleted_accounts_endpoint: string;
   jwks_uri: string;
   response_types_supported: string[];
   response_modes_supported: string[];

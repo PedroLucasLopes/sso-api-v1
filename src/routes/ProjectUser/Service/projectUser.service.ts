@@ -8,6 +8,7 @@ import {
 import { CreateProjectUser } from '../dto/createProjectUser.dto';
 import { EditProjectUser } from '../dto/editProjectUser.dto';
 import { ProjectUser } from 'generated/prisma/client';
+import { SSO_SELF_PROJECT_NAME } from 'src/global/constants/selfProject.constant';
 import { ApiException } from 'src/global/error/apiError';
 
 @Injectable()
@@ -46,11 +47,14 @@ export class ProjectUserService {
 
     await assertSelfWriter(this.prisma, admin, projectId);
 
-    const createProjectUser = this.prisma.projectUser.create({
-      data: { userId, projectId, roleId },
-    });
+    const [, membership] = await this.prisma.$transaction([
+      this.prisma.projectBlock.deleteMany({ where: { userId, projectId } }),
+      this.prisma.projectUser.create({
+        data: { userId, projectId, roleId },
+      }),
+    ]);
 
-    return createProjectUser;
+    return membership;
   }
 
   async changeRole(
@@ -100,7 +104,10 @@ export class ProjectUserService {
   ): Promise<void> {
     const membership = await this.prisma.projectUser.findUnique({
       where: { userId_projectId: { userId, projectId } },
-      include: { role: { select: { name: true } } },
+      include: {
+        role: { select: { name: true } },
+        project: { select: { name: true } },
+      },
     });
 
     if (!membership) {
@@ -114,14 +121,25 @@ export class ProjectUserService {
       roleName: membership.role.name,
     });
 
+    const now = new Date();
+
     await this.prisma.$transaction([
       this.prisma.refreshToken.updateMany({
         where: { userId, projectId, revokedAt: null },
-        data: { revokedAt: new Date() },
+        data: { revokedAt: now },
       }),
       this.prisma.projectUser.delete({
         where: { userId_projectId: { userId, projectId } },
       }),
+      ...(membership.project.name === SSO_SELF_PROJECT_NAME
+        ? []
+        : [
+            this.prisma.projectBlock.upsert({
+              where: { userId_projectId: { userId, projectId } },
+              create: { userId, projectId, createdAt: now },
+              update: {},
+            }),
+          ]),
     ]);
   }
 }

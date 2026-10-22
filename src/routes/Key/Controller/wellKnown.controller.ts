@@ -37,6 +37,7 @@ export class WellKnownController {
       introspection_endpoint: `${this.issuer}/oauth/introspect`,
       introspection_endpoint_auth_methods_supported: ['private_key_jwt'],
       permissions_endpoint: `${this.issuer}/oauth/permissions`,
+      deleted_accounts_endpoint: `${this.issuer}/oauth/deleted-accounts`,
       jwks_uri: `${this.issuer}/.well-known/jwks.json`,
       response_types_supported: ['code'],
       response_modes_supported: ['query'],
