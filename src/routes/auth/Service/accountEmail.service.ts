@@ -21,8 +21,7 @@ export interface AccountEmailContext {
 }
 
 type LinkKind =
-  | typeof AccountEmailKind.SIGNUP
-  | typeof AccountEmailKind.PASSWORD_RESET;
+  typeof AccountEmailKind.SIGNUP | typeof AccountEmailKind.PASSWORD_RESET;
 
 const QUOTA_KINDS: AccountEmailKind[] = [
   AccountEmailKind.SIGNUP,

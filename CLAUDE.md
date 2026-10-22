@@ -47,21 +47,26 @@ npx prisma generate
 Porta padrão: `PORT` ou **8080**. Prefixo global: **`/sso`**.
 
 Em container, `docker compose up -d --build` na raiz deste repositório, com a configuração em
-`.env.docker`. O compose sobe só o SSO e as migrations. Cada aplicação sobe o próprio compose, no
-próprio repositório, e chega a este serviço pela porta da máquina, `host.docker.internal:8080`.
+`.env.docker`. O compose sobe o SSO e as migrations, e o Mailpit quando `COMPOSE_PROFILES=mail`
+está no `.env`. Cada aplicação sobe o próprio compose, no próprio repositório, e chega a este serviço
+pela porta da máquina, `host.docker.internal:8080`.
 
-`npm run test:oauth` sobe 174 asserções contra o servidor rodando: ordem dos erros do authorize,
+`npm run test:oauth` sobe 228 asserções contra o servidor rodando: ordem dos erros do authorize,
 formato dos erros do token endpoint, PKCE, autenticação de cliente, verificação do access token
 contra o JWKS, uso único do code, rotação de refresh token, revogação pelos dois tipos de token, a
 autorização administrativa vinda do banco, a raiz e o 404 de rota negada, papéis de nome livre, troca
 e remoção de membro, a tela de login do IdP, o login do console e a escrita pela sessão com CSRF, a
 exclusão de redirect URI, a proteção do projeto SSO, a exclusão de conta sem projeto, a
-introspecção e o contrato de erro por código. **Rode depois de qualquer mudança em
-`routes/auth/` ou em `global/access/`.**
+introspecção, o contrato de erro por código e o cadastro aberto por projeto, com os links lidos no
+Mailpit. **Rode depois de qualquer mudança em `routes/auth/` ou em `global/access/`.** A seção do
+cadastro exige `SMTP_HOST` no `.env.docker` e o Mailpit de pé; sem eles, as duas primeiras
+asserções dela falham e dizem o que falta.
 
 `npx jest` roda os testes de unidade. Hoje cobrem a proteção do projeto SSO, inclusive a regra do
-último SUPERADMIN, que a suíte ponta a ponta não alcança sem rebaixar a raiz real do ambiente, e os
-filtros do Prisma, que não podem deixar o texto dele chegar ao corpo da resposta.
+último SUPERADMIN, que a suíte ponta a ponta não alcança sem rebaixar a raiz real do ambiente, os
+filtros do Prisma, que não podem deixar o texto dele chegar ao corpo da resposta, a política de
+senha escolhida pela pessoa, o Pwned Passwords, o Turnstile, a decisão do segundo fator, o logo do
+projeto e os e-mails de conta.
 
 A suíte ponta a ponta **só roda contra banco local** e recusa outro endereço antes de gravar qualquer
 coisa: ela cria operadores com papel no próprio SSO, papéis e rotas, e desfaz tudo no fim, inclusive
@@ -96,18 +101,20 @@ quando quebra no meio. Precisa do SQL de primeira subida aplicado e de mais nenh
 ```bash
 💻 src/
 ├─ 🧩 global/
-│  ├─ access/        # ⭐ AdminAccessService (quem pode agir), AdminRoutesService (as rotas da raiz) e a proteção do projeto SSO
+│  ├─ access/        # ⭐ AdminAccessService (quem pode agir), AdminRoutesService (as rotas da raiz), a proteção do projeto SSO e projectPolicy.ts (cadastro e segundo fator)
 │  ├─ constants/     # metadata dos guards, nome do projeto do SSO, prefixo global
 │  ├─ cookie/        # CookieService: cookies cifrados (AES-256-GCM)
-│  ├─ crypto/        # aead.ts (primitiva) + KeyEncryptionService
+│  ├─ crypto/        # aead.ts (primitiva) + KeyEncryptionService + passwordPolicy.ts (senha escolhida pela pessoa)
 │  ├─ decorator/     # @Public() @Authenticated() @CurrentAdmin()
 │  ├─ error/         # contrato de erro (apiError.ts), recusa da validação e filtros do Prisma
 │  ├─ guards/        # SSOAdminGuard (APP_GUARD), GoogleAuthGuard
+│  ├─ mail/          # MailerService: SMTP pelo nodemailer, ou desligado sem SMTP_HOST
+│  ├─ security/      # Turnstile (HumanCheckService e guard), Pwned Passwords, SameOriginGuard
 │  ├─ pagination/
 │  └─ prisma/
 ├─ 🔐 routes/
-│  ├─ auth/          # ⭐ fluxo OAuth
-│  │  ├─ Controller/ Service/ dto/ error/ strategy/ auth.constant.ts
+│  ├─ auth/          # ⭐ fluxo OAuth, login, cadastro e senha nova por link
+│  │  ├─ Controller/ Service/ dto/ error/ mail/ strategy/ auth.constant.ts account.constant.ts
 │  ├─ Key/           # chaves de assinatura, JWKS, discovery, chaves de cliente
 │  ├─ Me/            # GET /sso/me: identidade e permissões de quem chamou
 │  ├─ User/  Project/  Route/  Role/  Permission/  ProjectUser/  redirectUri/
@@ -126,14 +133,16 @@ maiúscula** nas subpastas. (⚠️ o `krloc` usa minúsculas — divergência h
 
 ```
 User ──< ProjectUser >── Project ──< Route ──< Permission >── Role
-     └──< AuthSession           ├──< redirectUri
-             └──< RefreshToken  └──< ClientKey
+  │  └──< AuthSession           ├──< redirectUri
+  │          └──< RefreshToken  ├──< ClientKey
+  └──────< AccountEmail >───────┘   defaultRoleId ──> Role
 ```
 
 | Model | Notas |
 |---|---|
 | `User` | `email` único; `authId` = id do Google, fixado no 1º login e conferido nos seguintes |
-| `Project` | uma aplicação cliente; `clientId` único de 32 bytes hex. **O próprio SSO é um deles**, de nome `SSO` |
+| `Project` | uma aplicação cliente; `clientId` único de 32 bytes hex. **O próprio SSO é um deles**, de nome `SSO`. `signupPolicy` (`CLOSED` padrão, `OPEN`), `mfaPolicy` (`REQUIRED` padrão, `OPTIONAL`), `defaultRoleId` (FK com `SET NULL`), `displayName` e `logo` da tela de login |
+| `AccountEmail` | todo e-mail de conta que o SSO manda: link de cadastro, de senha nova, aviso de conta que já existe e de senha trocada. O link guarda só o SHA-256 do token. É também a conta da cota por endereço |
 | `redirectUri` | lista branca de callbacks por projeto, único por `(projectId, redirectUri)` |
 | `Route` | `path` + `method` + `projectId`, único em conjunto |
 | `Role` | nome livre (maiúsculas, dígitos e `_`), único por `(name, projectId)`. Todo projeto nasce com SUPERADMIN, ADMIN, MANAGER e VIEWER, vazios |
@@ -141,7 +150,7 @@ User ──< ProjectUser >── Project ──< Route ──< Permission >─�
 | `ProjectUser` | PK composta `(userId, projectId)` — um papel por usuário por projeto |
 | `SigningKey` | chaves RS256 do AS. `id` é o `kid` do JWKS. Privada cifrada com `KEY_ENCRYPTION_KEY` |
 | `ClientKey` | chave pública do RP para `private_key_jwt`. Substitui o `clientSecret` removido |
-| `AuthSession` | sessão do usuário com o SSO. Âncora de revogação e do single sign-on |
+| `AuthSession` | sessão do usuário com o SSO. Âncora de revogação e do single sign-on. `singleFactor` marca a que abriu sem segundo fator; padrão `false` |
 | `AuthorizationCode` | guardado como hash, consumido atomicamente |
 | `RefreshToken` | rotação obrigatória; `familyId` agrupa a cadeia para detecção de reuso |
 
@@ -303,10 +312,11 @@ decide pelo papel de até 15 minutos atrás. A introspecção devolve os dois li
 
 ## 🔑 Entrar com senha, e o segundo fator
 
-O login federado ao Google continua, e ao lado dele há **e-mail e senha emitidas pelo SSO**. Ninguém
-cria conta nem senha por conta própria: a linha de `User` nasce no console, e a de `UserPassword`
-nasce quando um administrador emite. Os dois caminhos terminam no mesmo lugar, e **os dois exigem o
-segundo fator por aplicativo**.
+O login federado ao Google continua, e ao lado dele há **e-mail e senha emitidas pelo SSO**. Em
+projeto `CLOSED`, o padrão, ninguém cria conta nem senha por conta própria: a linha de `User` nasce no
+console, e a de `UserPassword` nasce quando um administrador emite. Os dois caminhos terminam no mesmo
+lugar, e **os dois exigem o segundo fator por aplicativo**. O projeto `OPEN` muda as duas coisas para
+quem se cadastra: ver "Cadastro aberto por projeto", abaixo.
 
 ```
 e-mail e senha ─┐                        ┌─ trocar a senha (primeiro acesso)
@@ -369,6 +379,156 @@ caminho do Google entrega.
 
 Como toda rota administrativa nova, a raiz as alcança no mesmo deploy; os papéis de gestão, depois de
 cadastradas no catálogo do projeto `SSO` e concedidas.
+
+---
+
+## 🚪 Cadastro aberto por projeto
+
+O SSO nasceu para força de trabalho: conta criada no console, senha emitida por administrador,
+segundo fator sempre. Uma aplicação de consumo, como o Meet Me, precisa que a pessoa crie a própria
+conta. As duas coisas convivem **por projeto**, e o padrão de todo projeto continua o de antes: KRLoc
+e o console não mudam nada.
+
+| Política | Valores | Quem muda |
+|---|---|---|
+| `signupPolicy` | `CLOSED` (padrão): as contas nascem no console. `OPEN`: a pessoa se cadastra na tela do IdP | só a raiz, em `PATCH /sso/project/:id/policy` |
+| `mfaPolicy` | `REQUIRED` (padrão): segundo fator de todo mundo. `OPTIONAL`: dispensado só para o papel padrão | só a raiz |
+| `defaultRoleId` | o papel de quem se cadastra ou entra pela primeira vez. Obrigatório com `OPEN` ou `OPTIONAL`, do próprio projeto, e não se apaga nem muda de projeto enquanto é padrão (`role_is_default`) | só a raiz |
+
+- **Só a raiz**, mesmo com a rota concedida no catálogo (`project_policy_root_only`): abrir cadastro
+  dá papel a qualquer pessoa da internet, e um papel de gestão que trocasse o padrão por `ADMIN`
+  entregaria a aplicação inteira.
+- **O projeto `SSO` fica `CLOSED`, `REQUIRED` e sem papel padrão**, nem pela raiz
+  (`assertSelfProjectPolicy`, em `selfProjectProtection.ts`), e `projectPolicy.ts` ignora o que
+  estiver no banco para ele.
+- **Nome de exibição e logo** (`PUT /sso/project/:id`, com o catálogo de sempre) aparecem na tela de
+  login. O logo é data URI de PNG, JPEG ou WebP de até 48 KiB, conferido pelos primeiros bytes: sem URL
+  de fora, a política de conteúdo da tela não abre para imagem de terceiro, e SVG fica de fora. Os 48
+  KiB cabem no limite de 100 KB do corpo JSON. A listagem de projetos não carrega o logo; o projeto e o
+  overview, sim.
+
+### O cadastro, com o e-mail primeiro
+
+```
+tela de login, com pedido pendente de projeto OPEN
+  └─ e-mail + Turnstile ─► POST /sso/login/signup ─► 202, sempre igual
+                             └─ depois da resposta: o link, ou o aviso de conta que já existe
+/link#token=… ─► POST /sso/account/link ─► nome e senha ─► POST /sso/account/signup
+  └─ a conta nasce verificada, com o papel padrão, e a sessão abre
+     ├─ pedido ainda vivo neste navegador ─► code direto para a aplicação
+     └─ outro navegador, ou passados os 5 minutos ─► "Ir para <aplicação>", a origem da redirect URI
+```
+
+- **A senha só nasce na página do link.** Com ela no primeiro formulário, quem cadastrasse o e-mail de
+  outra pessoa escolheria a senha que passa a valer quando a vítima clica no link (pre-account
+  takeover). Assim nenhuma linha de `User` existe antes de o e-mail se provar, e não há hash pendente.
+- **Resposta igual exista o e-mail ou não**, e o trabalho (busca, link, envio) corre depois da
+  resposta, em `setImmediate`: nem o tempo denuncia a conta. E-mail novo recebe o link de criar conta;
+  conta com senha recebe "você já tem conta", com link de senha nova; conta só com Google recebe o
+  aviso sem link.
+- **O link** tem 256 bits, vai no **fragmento** (`/link#token=…`), que nenhum servidor recebe e a página
+  tira da barra ao abrir, vale 30 minutos e uma vez só, e um pedido novo vence o anterior. O banco guarda
+  só o SHA-256.
+- **Cota de 3 e-mails de conta por hora por endereço**, contada em `AccountEmail`, além do limite por IP
+  (10 por minuto em cada rota de pedido e de link). Passando da cota, a resposta continua 202 e nada sai.
+- **`createdAt` e `expiresAt` dessas linhas saem do Node**, não do `DEFAULT CURRENT_TIMESTAMP`: o
+  Postgres desta máquina está em `America/Sao_Paulo`, e a cota compararia horas de fusos diferentes.
+- **Pedido e link só aceitam JSON da própria origem** (`SameOriginGuard`): `Origin` presente e diferente
+  da tela de login e do issuer recebe `origin_not_allowed`, e corpo que não é `application/json` recebe
+  `json_required`. Sem isso, um formulário de outro site postaria um token do atacante e logaria a
+  vítima na conta dele (login CSRF), porque o link não exige o cookie do pedido.
+- **Uma sessão por navegador.** Sessão nova, pelo link ou pelo login, revoga a que o cookie trazia, com
+  os refresh tokens dela; senão a antiga sobreviveria ao logout.
+
+### Senha nova por link, pela própria pessoa
+
+`POST /sso/login/password/reset`, com pedido pendente de projeto `OPEN`, Turnstile e a mesma resposta
+igual, manda o link à conta que tem senha; `POST /sso/account/password` troca. A troca:
+
+- passa pela política de senha e pelo Pwned Passwords **antes** de gastar o link;
+- zera o bloqueio por tentativas e o `mustChange`;
+- **encerra todas as sessões** da conta, com refresh tokens e codes pendentes, numa transação, e o
+  access token já emitido passa a responder inativo na introspecção;
+- manda o aviso de senha trocada e não abre sessão: a pessoa entra de novo, com a senha nova.
+
+Conta sem senha, só com Google, não ganha senha por aqui, e conta cuja senha o administrador revogou
+também não: o link de senha nova só sai, e só vale, para quem tem `UserPassword`. A troca do primeiro
+acesso dos projetos `CLOSED` continua com as regras de antes.
+
+### A senha escolhida pela pessoa
+
+`passwordPolicy.ts`: o que o SSO já exigia (12 a 200 caracteres, sem espaço nas pontas, variada) mais
+as regras do Mixtape: letras **e** números, sem o nome (cada palavra de 4 letras ou mais, sem ligar para
+acento), o e-mail, o começo dele ou o nome do projeto, e sem sequência ou repetição que domine a senha
+(`1234`, `aaaa`). Depois, o **Pwned Passwords** por k-anonimato: só os 5 primeiros caracteres do SHA-1
+saem do SSO, com `Add-Padding`, e o resto é comparado aqui. Fora do ar, a senha segue com as regras
+locais. A recusa é `password_refused` com `reason`, que a tela traduz.
+
+### Google sem conta
+
+Em projeto `OPEN`, o primeiro login pelo Google cria a conta, desde que o Google diga
+`email_verified: true`; ausente não serve. O e-mail é comparado sem ligar para maiúscula, e se já houver
+conta com ele, o Google é vinculado a ela, como sempre foi. Em projeto `CLOSED` continua
+`account_not_registered`, e o pedido pendente sobrevive à recusa, para a pessoa tentar a senha.
+
+### Quem já tem conta
+
+Conta que entra pela primeira vez num projeto `OPEN` ganha o papel padrão ao receber o code
+(`ProjectEntryService.enter`), com ou sem sessão aberta. ⚠️ Por isso **tirar alguém de um projeto `OPEN`
+não bloqueia**: no próximo login a pessoa volta com o papel padrão. Bloquear conta é pendência.
+
+### O segundo fator opcional
+
+`OPTIONAL` dispensa o código **só para quem está no papel padrão** e não tem papel nenhum no projeto
+`SSO` (`secondFactorOptional`, mais a consulta em `ProjectEntryService`). Qualquer outro papel do
+projeto, como o `CURATOR` do Meet Me, e toda a gestão do ecossistema continuam obrigados. Quem já
+cadastrou o TOTP continua sendo pedido.
+
+A sessão guarda se entrou sem o segundo fator (`AuthSession.singleFactor`), e essa sessão nunca abre o
+que o exige:
+
+| Onde | Com sessão `singleFactor` |
+|---|---|
+| `/oauth/authorize` e `/session/login` de projeto ou papel que exige | **step-up**: a tela pede só o código, ou o cadastro do TOTP, da mesma pessoa, e a mesma sessão é promovida, sem derrubar os grants das outras aplicações |
+| token endpoint, por code ou refresh | `invalid_grant`, com a família revogada, se a política ou o papel passaram a exigir |
+| introspecção | `{ active: false }` no mesmo caso, então a aplicação derruba a sessão em até 30 s |
+| console, com a sessão como credencial | `login_required` para quem tem papel no SSO; o console pede login, que cai no step-up |
+
+O padrão da coluna é `false`, de propósito: toda sessão de antes, e as que `test:oauth` e o
+`ssoTestHarness` do `sso-client` inserem por SQL, contam como sessões com segundo fator, e nada muda
+para elas. Não há tela de conta para cadastrar o TOTP depois; é pendência.
+
+### E-mail e Turnstile
+
+- **`MailerService`**: SMTP pelo `nodemailer`, TLS 1.2 ou mais (`SMTP_REQUIRE_TLS`), sem ler arquivo
+  nem URL, com `Auto-Submitted` e `X-Auto-Response-Suppress`. Sem `SMTP_HOST`, a tela não oferece
+  cadastro nem senha nova (`signup` e `passwordReset` falsos em `GET /login/request`), e os pedidos
+  respondem `email_unavailable`. Falha de envio vai para o log só com o código do SMTP.
+- **Os textos dos e-mails** moram em `routes/auth/mail/accountMail.messages.ts`, em pt-BR, en e es, na
+  língua que a tela mandou no pedido: HTML em tabela, com estilo em linha, sem imagem de fora, com o nome
+  da aplicação escapado, e versão em texto puro.
+- **Mailpit** no perfil `mail` do compose, nas portas 1026 (SMTP) e 8026 (caixa), fora das 1025 e 8025
+  do Mixtape. No container, `SMTP_HOST=mailpit` e `SMTP_PORT=1025`.
+- **Turnstile** nas rotas de pedido (`@RequireHuman` com `HumanCheckGuard`), depois do limite por IP: o
+  token chega no cabeçalho `x-human-check` e é conferido na Cloudflare, com a ação e, se configurado, o
+  hostname. Sem token, `human_check_required`; recusado, `human_check_failed`. Cloudflare fora do ar
+  deixa passar e avisa no log uma vez por minuto. As chaves de teste (`1x…AA`) aceitam qualquer token: o
+  SSO não sobe com elas sem `TURNSTILE_ALLOW_TEST_KEYS=true`. O login com senha **não** pede Turnstile,
+  para nada mudar nos projetos `CLOSED`.
+
+### Rotas do cadastro
+
+| Rota | O que faz |
+|---|---|
+| `POST /sso/login/signup` | `{ email, locale }`, com pedido pendente de projeto `OPEN`; 202 `{ next: "check_email" }` |
+| `POST /sso/login/password/reset` | o mesmo, para senha nova |
+| `POST /sso/account/link` | `{ token }`: para que serve o link, de quem e de qual aplicação; ou 410 `link_invalid` |
+| `POST /sso/account/signup` | `{ token, name, password }`: cria a conta. `next` é `done` com `redirectTo` (pedido vivo) ou com `continueTo`, `enroll_mfa` ou `credentials` |
+| `POST /sso/account/password` | `{ token, password }`: troca a senha; `next: "credentials"`, com `continueTo` |
+| `PATCH /sso/project/:id/policy` | `{ signupPolicy, mfaPolicy, defaultRoleId }`, só a raiz |
+
+`GET /sso/login/request` passou a trazer `logo`, `signup`, `passwordReset` e `humanCheck`
+(`{ provider, siteKey }`), e `application` é o nome de exibição quando houver.
 
 ---
 
@@ -501,6 +661,8 @@ as outras aplicações.
 | GET | `/sso/login/request` | público, o pedido pendente e a etapa em que a pessoa está |
 | POST | `/sso/login/password` · `/sso/login/password/change` | público, com pedido pendente: primeiro fator e troca no primeiro acesso |
 | POST | `/sso/login/mfa/setup` · `/sso/login/mfa/confirm` · `/sso/login/mfa` | público, com etapa aberta: cadastro e conferência do segundo fator |
+| POST | `/sso/login/signup` · `/sso/login/password/reset` | público, com pedido pendente de projeto `OPEN`, Turnstile e JSON da própria origem: manda o link por e-mail |
+| POST | `/sso/account/link` · `/sso/account/signup` · `/sso/account/password` | público, com o token do link e JSON da própria origem: cria a conta ou troca a senha |
 | GET | `/sso/session` · `/sso/session/login` | público: estado da sessão e login do console |
 | POST | `/sso/session/logout` | público, exige `X-CSRF-Token` |
 | GET | `/sso/me` | autenticado, sem RBAC; devolve o `csrfToken` para quem veio pela sessão |
@@ -508,6 +670,7 @@ as outras aplicações.
 | GET · POST DELETE | `/sso/user/:id/credential` · `/sso/user/:id/password` · `/sso/user/:id/mfa` | catálogo: emitir senha, revogar e resetar o segundo fator |
 | GET PUT DELETE | `/sso/user/:id` · `/sso/project/:id` · `/sso/route/:id` · `/sso/role/:id` | catálogo |
 | GET · PATCH | `/sso/project/:id/overview` · `/sso/project/:id/status` | catálogo |
+| PATCH | `/sso/project/:id/policy` | catálogo, e só a raiz muda: cadastro, segundo fator e papel padrão |
 | POST · DELETE | `/sso/permission` · `/sso/permission/:id` | catálogo |
 | POST | `/sso/projectuser` | catálogo |
 | PUT DELETE | `/sso/projectuser/:projectId/:userId` | catálogo: trocar o papel e tirar do projeto |
@@ -538,6 +701,11 @@ papéis de gestão; até lá, só a raiz a alcança.
 | `AUTH_SESSION_TTL` | segundos. Hoje 90 dias. **Tem de ser ≥ `REFRESH_TOKEN_TTL`** |
 | `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `GOOGLE_CALLBACK_URL` | credenciais do GCP |
 | `TRUST_PROXY` | quantos saltos de proxy confiar no `X-Forwarded-For`. Sem ela, o limite de requisições conta todo mundo como o proxy; ligada sem proxy na frente, qualquer um escolhe o próprio IP |
+| `SMTP_HOST` · `SMTP_PORT` · `SMTP_SECURE` · `SMTP_REQUIRE_TLS` · `SMTP_USER` · `SMTP_PASSWORD` | provedor dos e-mails de conta. Sem `SMTP_HOST`, nenhum projeto oferece cadastro nem senha nova |
+| `MAIL_FROM` · `MAIL_REPLY_TO` | remetente e resposta. `MAIL_FROM` é obrigatório com `SMTP_HOST` |
+| `TURNSTILE_ENABLED` · `TURNSTILE_SITE_KEY` · `TURNSTILE_SECRET_KEY` · `TURNSTILE_HOSTNAMES` · `TURNSTILE_ALLOW_TEST_KEYS` | prova de que é uma pessoa no cadastro e na senha nova. Desligado por padrão; chave de teste só com `TURNSTILE_ALLOW_TEST_KEYS=true` |
+| `PWNED_PASSWORDS_ENABLED` | consulta de senha vazada por k-anonimato. Padrão `true` |
+| `COMPOSE_PROFILES` · `MAILPIT_SMTP_PORT` · `MAILPIT_UI_PORT` | no `.env`, só para o compose: `mail` sobe o Mailpit, nas portas 1026 e 8026 da máquina |
 
 ⚠️ Perder `KEY_ENCRYPTION_KEY` invalida todas as chaves de assinatura gravadas.
 `ConfigModule` é importado **sem `.forRoot()`**; o `.env` chega ao `process.env` porque
@@ -626,6 +794,10 @@ por teste em `test/oauth-e2e.js`.
 8. **Rota administrativa nova não entra sozinha no catálogo do SSO.** A raiz a alcança no mesmo
    deploy; os papéis de gestão, só depois que ela for cadastrada no projeto `SSO` e concedida a eles.
    Até lá eles recebem 404. Falha fechado, que é o lado certo de errar.
+9. **Cadastro aberto: o que ainda falta.** Tirar alguém de projeto `OPEN` não bloqueia (volta com o
+   papel padrão no próximo login); não há tela de conta para cadastrar o TOTP depois, no `OPTIONAL`;
+   a pessoa não exclui a própria conta (LGPD), nem as aplicações são avisadas; e nada apaga as linhas
+   vencidas de `AccountEmail`, que guardam e-mail de quem pediu cadastro e não terminou.
 
 ### ✅ Já corrigidos
 
@@ -733,12 +905,21 @@ por teste em `test/oauth-e2e.js`.
 - Nenhum segredo de administração volta para o ambiente.
 - A tela de login só oferece provedor com pedido pendente, e erro para ela vai como código.
 - Senha nunca é coletada pela aplicação, só pela tela do IdP. O grant de senha do OAuth não volta.
-- Senha emitida aparece uma vez, nasce com `mustChange` e some do servidor em hash de scrypt. Conta
-  nova não ganha senha sozinha, e ninguém se cadastra.
+- Senha emitida aparece uma vez, nasce com `mustChange` e some do servidor em hash de scrypt. Em
+  projeto `CLOSED`, o padrão, conta nova não ganha senha sozinha e ninguém se cadastra.
+- Em projeto `OPEN`, a pessoa se cadastra só pela tela do IdP, com pedido pendente, e a senha só nasce
+  na página do link, depois de o e-mail se provar. Pedido de cadastro e de senha nova responde igual
+  exista o e-mail ou não, e o envio corre depois da resposta.
+- Token de link só em hash no banco, no fragmento da URL, com 30 minutos e uso único. Pedido e link só
+  aceitam JSON da própria origem.
+- Política de cadastro, de segundo fator e papel padrão, só a raiz muda. O projeto `SSO` fica `CLOSED`,
+  `REQUIRED` e sem papel padrão.
 - E-mail desconhecido e senha errada respondem o mesmo `invalid_credentials`, e o caminho sem conta
   paga o mesmo tempo de hash.
 - O segundo fator é exigido nos dois caminhos, Google inclusive, e o segredo dele fica cifrado com
-  `KEY_ENCRYPTION_KEY`. Código usado não vale de novo.
+  `KEY_ENCRYPTION_KEY`. Código usado não vale de novo. A única dispensa é o papel padrão de projeto
+  `OPTIONAL`, para quem não tem papel no SSO; sessão `singleFactor` nunca abre projeto, papel ou console
+  que o exige, e `AuthSession.singleFactor` nasce `false`.
 - Escrita administrativa pela sessão exige `X-CSRF-Token` e origem do console. Não afrouxe.
 - Nada aqui lê arquivo de outro repositório.
 - O projeto `SSO` não se apaga, não se renomeia e não sai de `ACTIVE`; o catálogo, os membros, as
