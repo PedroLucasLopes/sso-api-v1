@@ -1,4 +1,3 @@
-import { HumanCheckWidget } from 'src/global/security/humanCheck.service';
 import { LoginStage } from './loginStep.dto';
 
 export class LoginProvider {
@@ -10,12 +9,8 @@ export class LoginProvider {
 export class LoginRequestView {
   kind: 'authorize' | 'session';
   application: string | null;
-  logo: string | null;
   expiresAt: string;
   providers: LoginProvider[];
   step: LoginStage | 'credentials';
   email: string | null;
-  signup: boolean;
-  passwordReset: boolean;
-  humanCheck: HumanCheckWidget | null;
 }

@@ -12,15 +12,13 @@ export class LoginStepCookie {
   email: string;
   stage: LoginStage;
   secret?: string;
-  sessionId?: string;
   createdAt: number;
 }
 
 export class LoginStepView {
-  next: LoginStage | 'done' | 'check_email' | 'credentials';
+  next: LoginStage | 'done';
   email?: string;
   redirectTo?: string;
-  continueTo?: string | null;
   secret?: string;
   otpauth?: string;
   recoveryCodes?: string[];

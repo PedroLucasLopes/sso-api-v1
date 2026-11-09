@@ -46,7 +46,6 @@ type Credential =
       userId: string;
       reference: string;
       csrfToken: string | undefined;
-      singleFactor: boolean;
     };
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -138,14 +137,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
       }
 
       throw new ApiException('sso_access_denied');
-    }
-
-    if (credential.via === 'session' && credential.singleFactor) {
-      this.logger.warn(
-        `sessao sem segundo fator recusada no console: ${membership.user.email}`,
-      );
-
-      throw new ApiException('login_required');
     }
 
     return {
@@ -330,7 +321,6 @@ export class AdminAccessService implements OnApplicationBootstrap {
       userId: session.userId,
       reference: `session:${session.id}`,
       csrfToken,
-      singleFactor: session.singleFactor,
     };
   }
 

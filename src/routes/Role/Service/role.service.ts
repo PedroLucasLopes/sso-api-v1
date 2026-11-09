@@ -106,10 +106,6 @@ export class RoleService {
       await assertNotRootRole(this.prisma, findRole);
     }
 
-    if (moves) {
-      await this.assertNotDefaultRole(id);
-    }
-
     const updateRole = await this.prisma.role.update({ where: { id }, data });
 
     return updateRole;
@@ -124,18 +120,7 @@ export class RoleService {
 
     await assertSelfWriter(this.prisma, admin, findRole.projectId);
     await assertNotRootRole(this.prisma, findRole);
-    await this.assertNotDefaultRole(id);
 
     await this.prisma.role.delete({ where: { id } });
-  }
-
-  private async assertNotDefaultRole(id: string): Promise<void> {
-    const projects = await this.prisma.project.count({
-      where: { defaultRoleId: id },
-    });
-
-    if (projects > 0) {
-      throw new ApiException('role_is_default');
-    }
   }
 }
