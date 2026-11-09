@@ -53,16 +53,11 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
     const user = await this.prisma.user.findUnique({ where: { email } });
 
     if (!user) {
-      const unregistered: GoogleUser = {
-        userId: null,
-        googleId,
-        email,
-        name: profile.displayName || email.split('@')[0],
-        emailVerified,
-      };
-
-      done(null, unregistered);
-      return;
+      this.logger.warn('login recusado: conta Google sem cadastro no SSO');
+      throw new IdentityProviderException(
+        'account_not_registered',
+        'usuario nao cadastrado no SSO',
+      );
     }
 
     if (!user.authId) {
@@ -82,10 +77,8 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
 
     const googleUser: GoogleUser = {
       userId: user.id,
-      googleId,
       email: user.email,
       name: user.name,
-      emailVerified,
     };
 
     done(null, googleUser);
